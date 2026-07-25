@@ -1,6 +1,7 @@
 param(
     [string]$ExePath = "",
     [string]$ArtifactDirectory = "",
+    [string]$ScreenshotPath = "",
     [switch]$Dangerous
 )
 
@@ -16,6 +17,11 @@ if (-not $ArtifactDirectory) {
 $ExePath = [IO.Path]::GetFullPath($ExePath)
 $ArtifactDirectory = [IO.Path]::GetFullPath($ArtifactDirectory)
 New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
+if ($ScreenshotPath) {
+    $ScreenshotPath = [IO.Path]::GetFullPath($ScreenshotPath)
+    New-Item -ItemType Directory -Force -Path (
+        [IO.Path]::GetDirectoryName($ScreenshotPath)) | Out-Null
+}
 $capturePath = Join-Path $ArtifactDirectory "mock-remote-received.txt"
 $requestOnePath = Join-Path $ArtifactDirectory "mock-ai-request-1.json"
 $requestTwoPath = Join-Path $ArtifactDirectory "mock-ai-request-2.json"
@@ -64,10 +70,27 @@ $removedKnowledgeBaseMarker = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("55+l6K+G5bqT"))
 $settingsLabel = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("6K6+572u"))
+$minimizeLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5pyA5bCP5YyW"))
+$maximizeLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5pyA5aSn5YyW5oiW6L+Y5Y6f"))
+$closeLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5YWz6Zet"))
+$assistantLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("QUkg5Yqp5omL"))
+$userLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5L2g"))
 $sendLabel = [Text.Encoding]::UTF8.GetString(
-    [Convert]::FromBase64String("5Y+R6YCB"))
+    [Convert]::FromBase64String("5Y+R6YCBKFMp"))
+$contextLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String(
+        "6ZmE5bim5bey6ISx5pWP55qE57uI56uv5LiK5LiL5paH"))
+$clearLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5riF56m65a+56K+d"))
+$clearDialogTitle = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5riF56m65b2T5YmN5Lya6K+d"))
 $readyStatus = [Text.Encoding]::UTF8.GetString(
-    [Convert]::FromBase64String("5bCx57uq"))
+    [Convert]::FromBase64String("5YeG5aSH5bCx57uq"))
 $receivingStatus = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("5q2j5Zyo5o6l5pS25Zue5aSNLi4u"))
 $completedStatus = [Text.Encoding]::UTF8.GetString(
@@ -78,6 +101,8 @@ $secondConfirmationTitle = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("6ZyA6KaB5LqM5qyh56Gu6K6k"))
 $commandFilledPrefix = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("5ZG95Luk5bey5aGr5YWl"))
+$fillTerminalLabel = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String("5aGr5YWl57uI56uv"))
 $connectingStatus = [Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String("5q2j5Zyo6L+e5o6l5qih5Z6L5pyN5YqhLi4u"))
 $terminalContextMarker = [Text.Encoding]::UTF8.GetString(
@@ -199,6 +224,10 @@ public static class PuttyAiAutomation
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessagePoint(
+        IntPtr hwnd, uint message, ref POINT point, IntPtr characterIndex);
+
     [DllImport("user32.dll", EntryPoint = "SendMessageW")]
     public static extern IntPtr SendMessageWide(
         IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
@@ -221,7 +250,25 @@ public static class PuttyAiAutomation
     public static extern bool IsWindowVisible(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    public static extern bool IsZoomed(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hwnd, int command);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
 
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
@@ -248,6 +295,22 @@ public static class PuttyAiAutomation
         public int top;
         public int right;
         public int bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int x;
+        public int y;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -299,11 +362,6 @@ function Get-WindowText([IntPtr]$Handle) {
     [PuttyAiAutomation]::SendMessageBuffer(
         $Handle, 0x000D, [IntPtr]$buffer.Capacity, $buffer) | Out-Null
     return $buffer.ToString()
-}
-
-function Convert-ToRichEditIndex([string]$Text, [int]$Index) {
-    if ($Index -le 0) { return $Index }
-    return [Text.Encoding]::UTF8.GetByteCount($Text.Substring(0, $Index))
 }
 
 function Set-UnicodeEditText([IntPtr]$Handle, [string]$Value) {
@@ -374,6 +432,7 @@ if ($Dangerous) { $serverArguments += "-Dangerous" }
 $server = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru -ArgumentList $serverArguments
 $putty = $null
 $putty2 = $null
+$puttyTab = $null
 
 try {
     Start-Sleep -Milliseconds 700
@@ -413,8 +472,29 @@ try {
     }
     if ($main -eq [IntPtr]::Zero) { throw "PuTTY main window was not created" }
 
-    $endpoint = $model = $key = $transcript = $prompt = $ask = $context = $apply =
-        $settings = $save = $status =
+    $mainRect = [PuttyAiAutomation+RECT]::new()
+    $monitorInfo = [PuttyAiAutomation+MONITORINFO]::new()
+    $monitorInfo.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($monitorInfo)
+    $monitor = [PuttyAiAutomation]::MonitorFromWindow($main, 2)
+    if (-not [PuttyAiAutomation]::GetWindowRect($main, [ref]$mainRect) -or
+        $monitor -eq [IntPtr]::Zero -or
+        -not [PuttyAiAutomation]::GetMonitorInfo($monitor, [ref]$monitorInfo)) {
+        throw "Could not inspect the initial PuTTY window placement"
+    }
+    $windowCentreX = $mainRect.left + $mainRect.right
+    $windowCentreY = $mainRect.top + $mainRect.bottom
+    $workCentreX = $monitorInfo.rcWork.left + $monitorInfo.rcWork.right
+    $workCentreY = $monitorInfo.rcWork.top + $monitorInfo.rcWork.bottom
+    if ([Math]::Abs($windowCentreX - $workCentreX) -gt 48 -or
+        [Math]::Abs($windowCentreY - $workCentreY) -gt 48) {
+        throw "The initial PuTTY window was not centred in the working area"
+    }
+
+    $endpoint = $model = $key = $transcript = $prompt = $ask = $context =
+        $clear = $apply = $background = $title = $hostTabs =
+        $settings = $save = $status = $minimize = $maximize = $close =
+        $leftSeparator =
+        $outerTop = $outerBottom = $outerLeft = $outerRight =
         [IntPtr]::Zero
     for ($i = 0; $i -lt 50; $i++) {
         $endpoint = [PuttyAiAutomation]::GetDlgItem($main, 0x710A)
@@ -424,43 +504,199 @@ try {
         $prompt = [PuttyAiAutomation]::GetDlgItem($main, 0x7104)
         $ask = [PuttyAiAutomation]::GetDlgItem($main, 0x7105)
         $context = [PuttyAiAutomation]::GetDlgItem($main, 0x7106)
+        $clear = [PuttyAiAutomation]::GetDlgItem($main, 0x7118)
+        $background = [PuttyAiAutomation]::GetDlgItem($main, 0x7100)
+        $title = [PuttyAiAutomation]::GetDlgItem($main, 0x7101)
+        $hostTabs = [PuttyAiAutomation]::GetDlgItem($main, 0x7116)
         $apply = [PuttyAiAutomation]::GetDlgItem($main, 0x7107)
         $settings = [PuttyAiAutomation]::GetDlgItem($main, 0x7108)
         $save = [PuttyAiAutomation]::GetDlgItem($main, 0x7114)
         $status = [PuttyAiAutomation]::GetDlgItem($main, 0x7102)
+        $minimize = [PuttyAiAutomation]::GetDlgItem($main, 0x711D)
+        $maximize = [PuttyAiAutomation]::GetDlgItem($main, 0x711E)
+        $close = [PuttyAiAutomation]::GetDlgItem($main, 0x711F)
+        $leftSeparator = [PuttyAiAutomation]::GetDlgItem($main, 0x711B)
+        $outerTop = [PuttyAiAutomation]::GetDlgItem($main, 0x7120)
+        $outerBottom = [PuttyAiAutomation]::GetDlgItem($main, 0x7121)
+        $outerLeft = [PuttyAiAutomation]::GetDlgItem($main, 0x7122)
+        $outerRight = [PuttyAiAutomation]::GetDlgItem($main, 0x7123)
         if (-not (@(
-            $endpoint, $model, $key, $transcript, $prompt, $ask, $context, $apply,
-            $settings, $save, $status
+            $endpoint, $model, $key, $transcript, $prompt, $ask, $context,
+            $clear, $apply, $background, $title, $hostTabs,
+            $settings, $save, $status, $minimize, $maximize, $close,
+            $leftSeparator,
+            $outerTop, $outerBottom, $outerLeft, $outerRight
         ) | Where-Object { $_ -eq [IntPtr]::Zero })) {
             break
         }
         Start-Sleep -Milliseconds 100
     }
-    if (@(
-        $endpoint, $model, $key, $transcript, $prompt, $ask, $context, $apply,
-        $settings, $save, $status
-    ) |
-        Where-Object { $_ -eq [IntPtr]::Zero }) {
-        throw "One or more AI panel controls were not created"
+    $controlHandles = [ordered]@{
+        endpoint = $endpoint; model = $model; key = $key
+        transcript = $transcript; prompt = $prompt; ask = $ask
+        context = $context; clear = $clear; apply = $apply; settings = $settings
+        background = $background; title = $title; hostTabs = $hostTabs
+        save = $save; status = $status; minimize = $minimize
+        maximize = $maximize; close = $close
+        leftSeparator = $leftSeparator
+        outerTop = $outerTop; outerBottom = $outerBottom
+        outerLeft = $outerLeft; outerRight = $outerRight
+    }
+    $missingControls = @($controlHandles.Keys | Where-Object {
+        $controlHandles[$_] -eq [IntPtr]::Zero
+    })
+    if ($missingControls.Count) {
+        throw "AI panel controls were not created: $($missingControls -join ', ')"
     }
     if ((Get-WindowText $settings) -ne $settingsLabel -or
         (Get-WindowText $ask) -ne $sendLabel -or
+        (Get-WindowText $context) -ne $contextLabel -or
+        (Get-WindowText $clear) -ne $clearLabel -or
         (Get-WindowText $status) -ne $readyStatus) {
-        throw "AI panel controls were not localized to Chinese"
+        throw "AI panel controls were not localized to Chinese " +
+            "(settings='$(Get-WindowText $settings)', " +
+            "send='$(Get-WindowText $ask)', " +
+            "context='$(Get-WindowText $context)', " +
+            "clear='$(Get-WindowText $clear)', " +
+            "status='$(Get-WindowText $status)')"
+    }
+    if (-not [PuttyAiAutomation]::IsWindowVisible($context) -or
+        -not [PuttyAiAutomation]::IsWindowVisible($clear)) {
+        throw "Context switch or standalone clear button was not visible"
+    }
+    $hostTabsRect = [PuttyAiAutomation+RECT]::new()
+    $backgroundRect = [PuttyAiAutomation+RECT]::new()
+    $titleRect = [PuttyAiAutomation+RECT]::new()
+    $minimizeRect = [PuttyAiAutomation+RECT]::new()
+    $closeRect = [PuttyAiAutomation+RECT]::new()
+    $outerTopRect = [PuttyAiAutomation+RECT]::new()
+    $outerBottomRect = [PuttyAiAutomation+RECT]::new()
+    $outerLeftRect = [PuttyAiAutomation+RECT]::new()
+    $outerRightRect = [PuttyAiAutomation+RECT]::new()
+    $leftSeparatorRect = [PuttyAiAutomation+RECT]::new()
+    if (-not [PuttyAiAutomation]::GetWindowRect($hostTabs, [ref]$hostTabsRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($background, [ref]$backgroundRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($title, [ref]$titleRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($minimize, [ref]$minimizeRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($close, [ref]$closeRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($outerTop, [ref]$outerTopRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect(
+            $outerBottom, [ref]$outerBottomRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($outerLeft, [ref]$outerLeftRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect(
+            $outerRight, [ref]$outerRightRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect(
+            $leftSeparator, [ref]$leftSeparatorRect)) {
+        throw "Could not inspect the global header layout"
+    }
+    if ($hostTabsRect.left -ne $outerLeftRect.right -or
+        $hostTabsRect.top -ne $outerTopRect.bottom -or
+        $hostTabsRect.right -ne $outerRightRect.left -or
+        $backgroundRect.top -ne $hostTabsRect.bottom -or
+        $backgroundRect.right -ne $outerRightRect.left -or
+        $backgroundRect.bottom -ne $outerBottomRect.top -or
+        $leftSeparatorRect.bottom -ne $outerBottomRect.top -or
+        $titleRect.top -lt $hostTabsRect.bottom -or
+        $minimizeRect.top -ne $hostTabsRect.top -or
+        $closeRect.right -ne $hostTabsRect.right -or
+        $closeRect.bottom -gt
+            ($hostTabsRect.top + 44)) {
+        throw "Window controls were not placed in the full-width global header"
+    }
+    if ($outerTopRect.left -ne $mainRect.left -or
+        $outerTopRect.top -ne $mainRect.top -or
+        $outerTopRect.right -ne $mainRect.right -or
+        ($outerTopRect.bottom - $outerTopRect.top) -ne 1 -or
+        $outerBottomRect.left -ne $mainRect.left -or
+        $outerBottomRect.right -ne $mainRect.right -or
+        $outerBottomRect.bottom -ne $mainRect.bottom -or
+        ($outerBottomRect.bottom - $outerBottomRect.top) -ne 1 -or
+        $outerLeftRect.left -ne $mainRect.left -or
+        $outerLeftRect.top -ne $outerTopRect.bottom -or
+        $outerLeftRect.bottom -ne $outerBottomRect.top -or
+        ($outerLeftRect.right - $outerLeftRect.left) -ne 1 -or
+        $outerRightRect.right -ne $mainRect.right -or
+        $outerRightRect.top -ne $outerTopRect.bottom -or
+        $outerRightRect.bottom -ne $outerBottomRect.top -or
+        ($outerRightRect.right - $outerRightRect.left) -ne 1) {
+        throw "The custom frame did not enclose all four sides of the PuTTY window"
+    }
+    if ([PuttyAiAutomation]::GetDlgItem($main, 0x7117) -ne [IntPtr]::Zero) {
+        throw "The obsolete user-selectable conversation history control is still present"
     }
     if ([PuttyAiAutomation]::SendMessage(
             $context, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) {
         throw "Terminal context was enabled by default"
     }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x7106, $context) | Out-Null
+    if ([PuttyAiAutomation]::SendMessage(
+            $context, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero) -eq [IntPtr]::Zero) {
+        throw "Terminal context switch did not turn on"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x7106, $context) | Out-Null
+    if ([PuttyAiAutomation]::SendMessage(
+            $context, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero) {
+        throw "Terminal context switch did not turn off"
+    }
+    [PuttyAiAutomation]::PostMessage(
+        $main, 0x0111, [IntPtr]0x7118, $clear) | Out-Null
+    $clearDialog = [IntPtr]::Zero
+    for ($i = 0; $i -lt 30 -and $clearDialog -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 100
+        $clearDialog = Find-Window $putty.Id "#32770" $clearDialogTitle
+    }
+    if ($clearDialog -eq [IntPtr]::Zero) {
+        throw "Standalone clear button did not open its confirmation"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $clearDialog, 0x0111, [IntPtr]7, [IntPtr]::Zero) | Out-Null
     $transcriptRect = [PuttyAiAutomation+RECT]::new()
     $transcriptRectOk = [PuttyAiAutomation]::GetWindowRect(
         $transcript, [ref]$transcriptRect)
     $transcriptWidth = $transcriptRect.right - $transcriptRect.left
     $configuredPanelWidth = [PuttyAiAutomation]::SendMessage(
         $main, 0x802A, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
-    if ($configuredPanelWidth -ne 480 -or
+    if ($configuredPanelWidth -ne 440 -or
         -not $transcriptRectOk -or $transcriptWidth -lt 300) {
         throw "AI transcript width was not expanded (measured=$transcriptWidth)"
+    }
+    $contextRect = [PuttyAiAutomation+RECT]::new()
+    $clearRect = [PuttyAiAutomation+RECT]::new()
+    [PuttyAiAutomation]::GetWindowRect($context, [ref]$contextRect) | Out-Null
+    [PuttyAiAutomation]::GetWindowRect($clear, [ref]$clearRect) | Out-Null
+    $contextWidth = $contextRect.right - $contextRect.left
+    if ($contextWidth -gt 275 -or $contextRect.right -ge $clearRect.left) {
+        throw "Terminal context label and switch were not grouped compactly"
+    }
+    if ((Get-WindowText $minimize) -ne $minimizeLabel -or
+        (Get-WindowText $maximize) -ne $maximizeLabel -or
+        (Get-WindowText $close) -ne $closeLabel) {
+        throw "Global window controls were not localized or accessible"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
+    Start-Sleep -Milliseconds 200
+    if (-not [PuttyAiAutomation]::IsZoomed($main)) {
+        throw "Global maximize button did not maximize the PuTTY window"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
+    Start-Sleep -Milliseconds 200
+    if ([PuttyAiAutomation]::IsZoomed($main)) {
+        throw "Global maximize button did not restore the PuTTY window"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711D, $minimize) | Out-Null
+    Start-Sleep -Milliseconds 200
+    if (-not [PuttyAiAutomation]::IsIconic($main)) {
+        throw "Global minimize button did not minimize the PuTTY window"
+    }
+    [PuttyAiAutomation]::ShowWindow($main, 9) | Out-Null
+    Start-Sleep -Milliseconds 200
+    if ([PuttyAiAutomation]::IsIconic($main)) {
+        throw "PuTTY window could not be restored after minimizing"
     }
     if (@(0x7111, 0x7112, 0x7113) | Where-Object {
             [PuttyAiAutomation]::GetDlgItem($main, $_) -ne [IntPtr]::Zero
@@ -530,22 +766,41 @@ try {
     if ($streamMarkerIndex -lt 0 -or $partialConversation.Contains("## ")) {
         throw "Streaming Markdown heading syntax was not rendered"
     }
-    $streamSelectionIndex = Convert-ToRichEditIndex `
-        $partialConversation $streamMarkerIndex
-    [PuttyAiAutomation]::SendMessage(
-        $transcript, 0x00B1, [IntPtr]$streamSelectionIndex,
-        [IntPtr]($streamSelectionIndex + $firstStreamMarker.Length)) | Out-Null
-    $streamHeadingStyle = [PuttyAiAutomation]::SendMessage(
-        $main, 0x802C, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64()
-    [PuttyAiAutomation]::SendMessage(
-        $transcript, 0x00B1,
-        [IntPtr]($streamSelectionIndex + $firstStreamMarker.Length),
-        [IntPtr]($streamSelectionIndex + $firstStreamMarker.Length)) | Out-Null
-    if (($streamHeadingStyle -band 0x1) -eq 0 -or
-        (($streamHeadingStyle -shr 8) -band 0xFFFF) -le 190) {
+    $streamHeadingStyle = 0L
+    $streamRichEditLimit = [Text.Encoding]::UTF8.GetByteCount(
+        $partialConversation) + 16
+    for ($scan = 0; $scan -lt $streamRichEditLimit; $scan++) {
+        [PuttyAiAutomation]::SendMessage(
+            $transcript, 0x00B1, [IntPtr]$scan,
+            [IntPtr]($scan + 1)) | Out-Null
+        $scanStyle = [PuttyAiAutomation]::SendMessage(
+            $main, 0x802C, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+        $scanHeight = ($scanStyle -shr 8) -band 0xFFFF
+        if (($scanStyle -band 0x1) -ne 0 -and $scanHeight -ge 240) {
+            $streamHeadingStyle = $scanStyle
+            break
+        }
+    }
+    if ($streamHeadingStyle -eq 0) {
         throw "Streaming Markdown heading did not receive heading formatting " +
             "(style=0x$($streamHeadingStyle.ToString('X')))"
     }
+
+    $scrollContentReady = $false
+    for ($i = 0; $i -lt 60; $i++) {
+        Start-Sleep -Milliseconds 25
+        if ((Get-WindowText $transcript).Contains("stream-scroll-anchor")) {
+            $scrollContentReady = $true
+            break
+        }
+    }
+    if (-not $scrollContentReady) {
+        throw "Streaming response did not reach the scroll stability marker"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $transcript, 0x0115, [IntPtr]6, [IntPtr]::Zero) | Out-Null
+    $streamTopLine = [PuttyAiAutomation]::SendMessage(
+        $transcript, 0x00CE, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
 
     $requestOk = $false
     for ($i = 0; $i -lt 100; $i++) {
@@ -558,10 +813,34 @@ try {
     if (-not $requestOk) {
         throw "AI request did not complete: $(Get-WindowText $status)"
     }
+    $completedTopLine = [PuttyAiAutomation]::SendMessage(
+        $transcript, 0x00CE, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+    if ($streamTopLine -gt 1 -or $completedTopLine -gt 1) {
+        throw "Streaming redraw forced the transcript away from the user's scroll position " +
+            "(before=$streamTopLine after=$completedTopLine)"
+    }
 
     $conversation = Get-WindowText $transcript
     if (-not $conversation.Contains($firstAnswerMarker)) {
         throw "AI response was not rendered in the transcript"
+    }
+    if (-not $conversation.Contains($assistantLabel) -or
+        -not $conversation.Contains([string][char]0x2500)) {
+        throw "AI response label or conversation separator was not rendered"
+    }
+    $userHeaderIndex = $conversation.IndexOf($userLabel)
+    $assistantHeaderIndex = $conversation.IndexOf($assistantLabel)
+    if ($userHeaderIndex -lt 0 -or $assistantHeaderIndex -lt 0) {
+        throw "User or AI role header was not rendered"
+    }
+    if ($ScreenshotPath) {
+        $screenshotTool = Join-Path $root "build\Release\test_screenshot.exe"
+        [PuttyAiAutomation]::SetForegroundWindow($main) | Out-Null
+        Start-Sleep -Milliseconds 200
+        & $screenshotTool -p $putty.Id -o $ScreenshotPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ScreenshotPath)) {
+            throw "Could not capture the completed PuTTY AI visual regression image"
+        }
     }
     if ($conversation.Contains('## ') -or $conversation.Contains('```') -or
         $conversation.Contains('**') -or $conversation.Contains('*italic*') -or
@@ -587,9 +866,13 @@ try {
     $bodyBoldFound = $false
     $userStyleFound = $false
     $assistantStyleFound = $false
+    $userHeaderStyleFound = $false
+    $assistantHeaderStyleFound = $false
     $userBodyBackColour = 232 -bor (242 -shl 8) -bor (252 -shl 16)
     $userBodyTextColour = 24 -bor (46 -shl 8) -bor (68 -shl 16)
     $assistantBodyTextColour = 29 -bor (33 -shl 8) -bor (37 -shl 16)
+    $userHeaderTextColour = 0 -bor (92 -shl 8) -bor (153 -shl 16)
+    $assistantHeaderTextColour = 36 -bor (105 -shl 8) -bor (92 -shl 16)
     $richEditLimit = [Text.Encoding]::UTF8.GetByteCount($conversation) + 64
     for ($scan = 0; $scan -lt $richEditLimit; $scan++) {
         [PuttyAiAutomation]::SendMessage(
@@ -616,6 +899,16 @@ try {
             $scanTextColour -eq $assistantBodyTextColour) {
             $assistantStyleFound = $true
         }
+        if (($scanStyle -band 0x21) -eq 0x21 -and $scanHeight -eq 200) {
+            if ($scanTextColour -eq $userHeaderTextColour -and
+                $scanBackColour -eq $userBodyBackColour) {
+                $userHeaderStyleFound = $true
+            }
+            if ($scanTextColour -eq $assistantHeaderTextColour -and
+                $scanBackColour -eq 0xFFFFFF) {
+                $assistantHeaderStyleFound = $true
+            }
+        }
     }
     if ($commandMarkerIndex -lt 0 -or -not $codeStyleFound -or
         -not $italicStyleFound -or -not $strikeStyleFound -or
@@ -625,8 +918,42 @@ try {
     if (-not $userStyleFound -or -not $assistantStyleFound) {
         throw "User and AI messages did not receive distinct visual styles"
     }
+    if (-not $userHeaderStyleFound -or -not $assistantHeaderStyleFound) {
+        throw "User and AI role headers do not use the same optimized font style"
+    }
     if (-not [PuttyAiAutomation]::IsWindowEnabled($apply)) {
         throw "Command candidate was not detected"
+    }
+    $candidateStart = [PuttyAiAutomation]::SendMessage(
+        $main, 0x8031, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+    $candidateEnd = [PuttyAiAutomation]::SendMessage(
+        $main, 0x8031, [IntPtr]1, [IntPtr]::Zero).ToInt32()
+    if ($candidateStart -lt 0 -or $candidateEnd -le $candidateStart) {
+        throw "Command candidate was not mapped to its response code block"
+    }
+    if ([PuttyAiAutomation]::IsWindowVisible($apply)) {
+        throw "Command fill action was visible before hovering its code block"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $transcript, 0x0115, [IntPtr]7, [IntPtr]::Zero) | Out-Null
+    $commandMouse = [PuttyAiAutomation]::SendMessage(
+        $main, 0x8032, [IntPtr]::Zero, [IntPtr]::Zero)
+    $commandMouseValue = $commandMouse.ToInt64()
+    $commandX = $commandMouseValue -band 0xFFFF
+    $commandY = ($commandMouseValue -shr 16) -band 0xFFFF
+    if ($commandX -ge 0x8000) { $commandX -= 0x10000 }
+    if ($commandY -ge 0x8000) { $commandY -= 0x10000 }
+    [PuttyAiAutomation]::SendMessage(
+        $transcript, 0x0200, [IntPtr]::Zero, $commandMouse) | Out-Null
+    Start-Sleep -Milliseconds 100
+    $applyText = Get-WindowText $apply
+    $applyVisible = [PuttyAiAutomation]::IsWindowVisible($apply)
+    $applyLocalized = $applyText.Contains($fillTerminalLabel.Substring(0, 2))
+    if (-not $applyVisible -or -not $applyLocalized) {
+        throw "Hovering the response command did not expose its terminal fill action " +
+            "(point=$commandX,$commandY, " +
+            "range=$candidateStart..$candidateEnd, visible=" +
+            "$applyVisible, text='$applyText')"
     }
 
     if (-not [PuttyAiAutomation]::FocusWindow($prompt)) {
@@ -807,6 +1134,78 @@ try {
         $savedKey.Dispose()
     }
 
+    $puttyTab = Start-Process -FilePath $ExePath -PassThru -ArgumentList @(
+        "-raw", "127.0.0.1", "-P", "18022"
+    )
+    $tabMain = [IntPtr]::Zero
+    for ($i = 0; $i -lt 50 -and $tabMain -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 100
+        $tabMain = Find-Window $puttyTab.Id "PuTTY"
+    }
+    if ($tabMain -eq [IntPtr]::Zero) {
+        throw "Second concurrent PuTTY host session was not created"
+    }
+    $hostTabs = [PuttyAiAutomation]::GetDlgItem($main, 0x7116)
+    $tabTranscript = [PuttyAiAutomation]::GetDlgItem($tabMain, 0x7103)
+    $sessionCount = 0
+    for ($i = 0; $i -lt 30 -and $sessionCount -lt 2; $i++) {
+        Start-Sleep -Milliseconds 100
+        $sessionCount = [PuttyAiAutomation]::SendMessage(
+            $main, 0x802F, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+    }
+    if ($hostTabs -eq [IntPtr]::Zero -or
+        -not [PuttyAiAutomation]::IsWindowVisible($hostTabs) -or
+        $sessionCount -lt 2) {
+        throw "Concurrent PuTTY sessions were not exposed in the host tab bar"
+    }
+    if ((Get-WindowText $tabTranscript).Contains($firstAnswerMarker)) {
+        throw "AI conversation leaked from one host session into another"
+    }
+    $targetTabIndex = -1
+    for ($i = 0; $i -lt $sessionCount; $i++) {
+        $sessionWindow = [PuttyAiAutomation]::SendMessage(
+            $main, 0x8030, [IntPtr]$i, [IntPtr]::Zero)
+        if ($sessionWindow -eq $tabMain) {
+            $targetTabIndex = $i
+            break
+        }
+    }
+    if ($targetTabIndex -lt 0) {
+        throw "Host tab list did not map to the concurrent PuTTY window"
+    }
+    $hostTabsRect = [PuttyAiAutomation+RECT]::new()
+    [PuttyAiAutomation]::GetWindowRect($hostTabs, [ref]$hostTabsRect) | Out-Null
+    $availableTabWidth =
+        ($hostTabsRect.right - $hostTabsRect.left) - 48
+    $tabWidth = 200
+    if ($sessionCount * $tabWidth -gt $availableTabWidth - 100) {
+        $tabWidth = [int](($availableTabWidth - 100) / $sessionCount)
+    }
+    if ($tabWidth -lt 140) { $tabWidth = 140 }
+    $tabClick = [IntPtr](
+        ((48 + $targetTabIndex * $tabWidth + [int]($tabWidth / 2)) -bor
+         (22 -shl 16)))
+    [PuttyAiAutomation]::SetForegroundWindow($main) | Out-Null
+    [PuttyAiAutomation]::SendMessage(
+        $hostTabs, 0x0202, [IntPtr]::Zero, $tabClick) | Out-Null
+    Start-Sleep -Milliseconds 200
+    $foregroundAfterTab = [PuttyAiAutomation]::GetForegroundWindow()
+    $activatedSession = [PuttyAiAutomation]::SendMessage(
+        $main, 0x8033, [IntPtr]::Zero, [IntPtr]::Zero)
+    if (($foregroundAfterTab -ne [IntPtr]::Zero -and
+         $foregroundAfterTab -ne $tabMain) -or
+        $activatedSession -ne $tabMain) {
+        $tabClickX = 48 + $targetTabIndex * $tabWidth +
+            [int]($tabWidth / 2)
+        throw "Clicking a host tab did not switch to its PuTTY session " +
+            "(index=$targetTabIndex width=$tabWidth x=$tabClickX " +
+            "target=$($tabMain.ToInt64()) foreground=" +
+            "$($foregroundAfterTab.ToInt64()) activated=" +
+            "$($activatedSession.ToInt64()) main=$($main.ToInt64()))"
+    }
+    Stop-Process -Id $puttyTab.Id -Force
+    $puttyTab = $null
+
     Stop-Process -Id $putty.Id -Force
     $putty = $null
     $putty2 = Start-Process -FilePath $ExePath -PassThru -ArgumentList @(
@@ -821,7 +1220,7 @@ try {
         throw "Second PuTTY session was not created for persistence regression"
     }
     $endpoint2 = $model2 = $key2 = $settings2 = $prompt2 = $ask2 =
-        $status2 = [IntPtr]::Zero
+        $status2 = $close2 = [IntPtr]::Zero
     for ($i = 0; $i -lt 50; $i++) {
         $endpoint2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x710A)
         $model2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x710C)
@@ -830,15 +1229,18 @@ try {
         $prompt2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7104)
         $ask2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7105)
         $status2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7102)
+        $close2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x711F)
         if (-not (@(
-            $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2
+            $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2,
+            $close2
         ) | Where-Object { $_ -eq [IntPtr]::Zero })) {
             break
         }
         Start-Sleep -Milliseconds 100
     }
     if (@(
-        $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2
+        $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2,
+        $close2
     ) |
         Where-Object { $_ -eq [IntPtr]::Zero }) {
         throw "Second session AI settings controls were not created"
@@ -880,24 +1282,57 @@ try {
         throw "The next session did not use the persisted model and API key"
     }
 
+    [PuttyAiAutomation]::PostMessage(
+        $main2, 0x0111, [IntPtr]0x711F, $close2) | Out-Null
+    $closeConfirmation = [IntPtr]::Zero
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        $closeConfirmation = Find-Window $putty2.Id "#32770"
+        if ($closeConfirmation -ne [IntPtr]::Zero -or
+            -not (Get-Process -Id $putty2.Id -ErrorAction SilentlyContinue)) {
+            break
+        }
+    }
+    if ($closeConfirmation -ne [IntPtr]::Zero) {
+        [PuttyAiAutomation]::SendMessage(
+            $closeConfirmation, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null
+    } elseif (Get-Process -Id $putty2.Id -ErrorAction SilentlyContinue) {
+        throw "Global close button neither closed PuTTY nor opened confirmation"
+    } else {
+        $putty2 = $null
+    }
+
     [pscustomobject]@{
         AiRequest = "passed"
         StreamingResponse = "passed"
+        StreamingScroll = "stable"
         ContextDefault = "disabled"
         ChineseUi = "passed"
         TranscriptTextColor = "readable"
         ExpandedPanel = "passed"
+        ContextSwitch = "visible toggle; disabled by default"
+        ConversationHistory = "always retained; no user-facing option"
+        StandaloneClear = "passed"
+        WindowControls = "minimize, maximize/restore, and close"
+        InitialPlacement = "centred"
+        GlobalHeader = "full-width"
+        CompleteFrame = "all four sides"
+        MessageSeparation = "user and AI labelled with separators"
+        RoleHeaderTypography = "uniform"
+        Screenshot = $(if ($ScreenshotPath) { $ScreenshotPath } else { "not requested" })
         BastionDirectLaunch = "@session, -load, -load tmp:file, and -raw -P passed"
         ConnectionKeepalive = "enabled"
         KnowledgeBaseRemoved = "passed"
         TerminalFocusRestore = "passed"
         ChinesePrompt = "passed"
         MultiTurnConversation = "passed"
+        HostSessionTabs = "isolated and switchable"
         PersistentChatCompletions = "passed"
         ProtectedApiKey = "Windows DPAPI"
         SensitiveLaunchLogging = "disabled"
         MarkdownRender = "passed"
         CommandDetection = "passed"
+        CommandHoverAction = "passed"
         Confirmation = "passed"
         TerminalFill = "passed"
         AutoEnter = "not sent"
@@ -906,6 +1341,9 @@ try {
     } | Format-List
 }
 finally {
+    if ($puttyTab -and (Get-Process -Id $puttyTab.Id -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $puttyTab.Id -Force
+    }
     if ($putty2 -and (Get-Process -Id $putty2.Id -ErrorAction SilentlyContinue)) {
         Stop-Process -Id $putty2.Id -Force
     }

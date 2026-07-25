@@ -29,12 +29,19 @@ char *save_screenshot(HWND hwnd, Filename *outfile)
     int x, y, w, h;
     RECT wr;
 
-    /* Use DwmGetWindowAttribute in place of GetWindowRect to exclude
-     * drop shadow, otherwise we get a load of unwanted desktop
-     * background under the shadow */
-    if (p_DwmGetWindowAttribute &&
-        0 <= p_DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                     &wr, sizeof(wr))) {
+    /* PuTTY AI uses a client-drawn frameless window. DWM can retain the
+     * pre-resize extended bounds for that window, so prefer its live window
+     * rectangle. Framed builds still use the DWM bounds to exclude shadow. */
+    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    bool frameless = !(style & WS_CAPTION);
+    if (frameless && GetWindowRect(hwnd, &wr)) {
+        x = wr.left;
+        y = wr.top;
+        w = wr.right - wr.left;
+        h = wr.bottom - wr.top;
+    } else if (p_DwmGetWindowAttribute &&
+               0 <= p_DwmGetWindowAttribute(
+                   hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &wr, sizeof(wr))) {
         x = wr.left;
         y = wr.top;
         w = wr.right - wr.left;
@@ -68,8 +75,17 @@ char *save_screenshot(HWND hwnd, Filename *outfile)
         goto out;
     }
 
-    if (!BitBlt(dcSave, 0, 0, w, h, dcWindow, x, y, SRCCOPY)) {
-        err = dupprintf("BitBlt: %s", win_strerror(GetLastError()));
+    bool captured = frameless ?
+        BitBlt(dcSave, 0, 0, w, h, dcWindow, x, y, SRCCOPY) :
+        PrintWindow(hwnd, dcSave, PW_RENDERFULLCONTENT);
+    if (!captured) {
+        captured = frameless ?
+            PrintWindow(hwnd, dcSave, PW_RENDERFULLCONTENT) :
+            BitBlt(dcSave, 0, 0, w, h, dcWindow, x, y, SRCCOPY);
+    }
+    if (!captured) {
+        err = dupprintf("PrintWindow/BitBlt: %s",
+                        win_strerror(GetLastError()));
         goto out;
     }
 
@@ -85,7 +101,7 @@ char *save_screenshot(HWND hwnd, Filename *outfile)
     size_t bmPixels = (size_t)w*h, bmBytes = bmPixels * 4;
     buffer = snewn(bmBytes, uint8_t);
 
-    if (!GetDIBits(dcWindow, bmSave, 0, h, buffer, &bmInfo, DIB_RGB_COLORS))
+    if (!GetDIBits(dcSave, bmSave, 0, h, buffer, &bmInfo, DIB_RGB_COLORS))
         err = dupprintf("GetDIBits (get data): %s",
                         win_strerror(GetLastError()));
 
@@ -110,7 +126,7 @@ char *save_screenshot(HWND hwnd, Filename *outfile)
     if (bmSave)
         DeleteObject(bmSave);
     if (dcSave)
-        DeleteObject(dcSave);
+        DeleteDC(dcSave);
     sfree(buffer);
     return err;
 }

@@ -13,9 +13,29 @@ static NORETURN PRINTF_LIKE(1, 2) void fatal_error(const char *p, ...)
 
 void out_of_memory(void) { fatal_error("out of memory"); }
 
+static DWORD target_pid;
+static HWND target_window;
+
+static BOOL CALLBACK find_process_window(HWND hwnd, LPARAM lParam)
+{
+    DWORD pid = 0;
+    wchar_t classname[64];
+    (void)lParam;
+    GetWindowThreadProcessId(hwnd, &pid);
+    classname[0] = L'\0';
+    GetClassNameW(hwnd, classname, lenof(classname));
+    if (pid == target_pid && IsWindowVisible(hwnd) &&
+        !wcscmp(classname, L"PuTTY")) {
+        target_window = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 int main(int argc, char **argv)
 {
     Filename *outfile = NULL;
+    HWND target;
 
     AuxMatchOpt amo = aux_match_opt_init(fatal_error);
     while (!aux_match_done(&amo)) {
@@ -29,6 +49,8 @@ int main(int argc, char **argv)
             fatal_error("unexpected argument '%s'", cmdline_arg_to_str(val));
         } else if (match_optval("-o", "--output")) {
             outfile = cmdline_arg_to_filename(val);
+        } else if (match_optval("-p", "--process")) {
+            target_pid = strtoul(cmdline_arg_to_str(val), NULL, 10);
         } else {
             fatal_error("unrecognised option '%s'\n",
                         cmdline_arg_to_str(amo.arglist->args[amo.index]));
@@ -38,7 +60,16 @@ int main(int argc, char **argv)
     if (!outfile)
         fatal_error("expected an output file name");
 
-    char *err = save_screenshot(NULL, outfile);
+    if (target_pid) {
+        EnumWindows(find_process_window, 0);
+        target = target_window;
+    } else {
+        target = FindWindowW(L"PuTTY", NULL);
+    }
+    if (!target)
+        fatal_error("PuTTY window was not found");
+
+    char *err = save_screenshot(target, outfile);
     if (err)
         fatal_error("%s", err);
     filename_free(outfile);

@@ -124,6 +124,7 @@ installed_program(putty)
 
 add_executable(puttytel
   window.c
+  ai.c
   putty.c
   help.c
   ${CMAKE_SOURCE_DIR}/stubs/no-gss.c
@@ -136,8 +137,14 @@ add_executable(puttytel
   puttytel.rc)
 be_list(puttytel PuTTYtel SERIAL OTHERBACKENDS)
 add_dependencies(puttytel generated_licence_h)
+if(CMAKE_C_COMPILER_ID MATCHES "MSVC" OR
+   CMAKE_C_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
+  target_compile_options(puttytel PRIVATE /utf-8)
+endif()
 target_link_libraries(puttytel
   guiterminal guimisc eventloop otherbackends settings network utils
+  winhttp
+  crypt32
   ${platform_libraries})
 set_target_properties(puttytel PROPERTIES WIN32_EXECUTABLE ON)
 installed_program(puttytel)
@@ -163,6 +170,7 @@ installed_program(puttygen)
 if(HAVE_CONPTY)
   add_executable(pterm
     window.c
+    ai.c
     pterm.c
     help.c
     conpty.c
@@ -175,8 +183,14 @@ if(HAVE_CONPTY)
     pterm.rc)
   be_list(pterm pterm)
   add_dependencies(pterm generated_licence_h)
+  if(CMAKE_C_COMPILER_ID MATCHES "MSVC" OR
+     CMAKE_C_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
+    target_compile_options(pterm PRIVATE /utf-8)
+  endif()
   target_link_libraries(pterm
     guiterminal guimisc eventloop settings network utils
+    winhttp
+    crypt32
     ${platform_libraries})
   set_target_properties(pterm PROPERTIES WIN32_EXECUTABLE ON)
   installed_program(pterm)

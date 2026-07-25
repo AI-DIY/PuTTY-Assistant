@@ -12,6 +12,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "putty.h"
 #include "terminal.h"
@@ -27,13 +28,24 @@
 #define RICHEDIT50W L"RICHEDIT50W"
 #endif
 
-#define AI_PANEL_WIDTH 480
+#define AI_PANEL_WIDTH 440
+#define AI_HOST_TABS_HEIGHT 90
+#define AI_HOST_TABS_HEADER_HEIGHT 44
+#define AI_FRAME_BUTTON_WIDTH 45
+#define AI_FRAME_CONTROLS_WIDTH (3 * AI_FRAME_BUTTON_WIDTH)
+#define AI_HOST_ACTION_WIDTH 48
+#define AI_OUTER_FRAME_WIDTH 1
 #define AI_TERMINAL_MIN_WIDTH 120
 #define AI_CONTEXT_DEFAULT 12000
 #define AI_CONTEXT_MAX 64000
 #define AI_HISTORY_MAX_MESSAGES 32
 #define AI_REGISTRY_KEY L"Software\\PuTTY AI"
 #define AI_LEGACY_REGISTRY_KEY L"Software\\SimonTatham\\PuTTY\\AI"
+#define AI_SESSION_TIMER_ID 0x71A0
+#define AI_MAX_SESSIONS 16
+#define AI_HOST_TABS_CLASS L"PuTTYAIHostTabs"
+#define PUTTY_IDM_NEW_SESSION 0x0020
+#define PUTTY_IDM_RECONFIGURE 0x0050
 
 enum {
     IDC_AI_BACKGROUND = 0x7100,
@@ -56,6 +68,21 @@ enum {
     /* 0x7111-0x7113 belonged to the removed knowledge-file controls. */
     IDC_AI_SAVE = 0x7114,
     IDC_AI_PRIVACY,
+    IDC_AI_HOST_TABS,
+    /* IDC_AI_SAVE_HISTORY was removed; conversation history is always kept. */
+    IDC_AI_SAVE_HISTORY,
+    IDC_AI_CLEAR,
+    IDC_AI_SESSION_METADATA,
+    IDC_AI_TOP_SEPARATOR,
+    IDC_AI_LEFT_SEPARATOR,
+    IDC_AI_PROMPT_BORDER,
+    IDC_AI_MINIMIZE,
+    IDC_AI_MAXIMIZE,
+    IDC_AI_CLOSE,
+    IDC_AI_OUTER_TOP,
+    IDC_AI_OUTER_BOTTOM,
+    IDC_AI_OUTER_LEFT,
+    IDC_AI_OUTER_RIGHT,
 };
 
 typedef struct AiRequest AiRequest;
@@ -86,24 +113,182 @@ struct AiHistoryEntry {
 
 struct AiPanel {
     WinGuiSeat *wgs;
-    HWND background, title, status, transcript, prompt;
-    HWND ask, include_context, apply, settings;
+    HWND host_tabs, background, title, status, transcript, prompt;
+    HWND top_separator, left_separator, prompt_border;
+    HWND outer_top, outer_bottom, outer_left, outer_right;
+    HWND ask, clear, include_context, apply, settings;
+    HWND minimize, maximize, close;
+    HWND session_metadata;
     HWND endpoint_label, endpoint, model_label, model;
     HWND key_label, key, limit_label, limit, save, privacy;
-    HFONT ui_font;
+    HFONT ui_font, title_font;
+    WNDPROC context_switch_wndproc, transcript_wndproc, frame_button_wndproc;
+    HWND hovered_frame_button;
+    HBRUSH panel_brush;
     HMODULE rich_edit_module;
     bool settings_visible;
     bool busy;
+    bool include_context_checked;
+    bool transcript_scroll_locked;
     wchar_t *candidate_command;
     bool candidate_dangerous;
+    LONG candidate_start, candidate_end;
     LONG stream_message_start, stream_start;
     char *stream_markdown;
     size_t stream_length, stream_capacity;
     ULONGLONG last_stream_render;
     unsigned update_depth;
+    bool update_follow_tail;
+    POINT update_scroll;
+    CHARRANGE update_selection;
+    HWND session_windows[AI_MAX_SESSIONS];
+    HWND last_activated_session;
+    wchar_t session_titles[AI_MAX_SESSIONS][128];
+    size_t session_count;
+    wchar_t current_host[128], current_user[64];
     AiHistoryEntry *history;
     size_t history_count, history_capacity;
 };
+
+static LONG rich_text_length(HWND hwnd)
+{
+    GETTEXTLENGTHEX request;
+    LRESULT length;
+    memset(&request, 0, sizeof(request));
+    request.flags = GTL_PRECISE | GTL_NUMCHARS;
+    request.codepage = 1200;
+    length = SendMessageW(hwnd, EM_GETTEXTLENGTHEX, (WPARAM)&request, 0);
+    if (length <= 0) {
+        LONG fallback = GetWindowTextLengthW(hwnd);
+        if (fallback > 0)
+            return fallback;
+    }
+    return length > LONG_MAX ? LONG_MAX : (LONG)length;
+}
+
+static bool transcript_is_at_bottom(AiPanel *panel)
+{
+    SCROLLINFO scroll;
+    memset(&scroll, 0, sizeof(scroll));
+    scroll.cbSize = sizeof(scroll);
+    scroll.fMask = SIF_ALL;
+    if (!GetScrollInfo(panel->transcript, SB_VERT, &scroll))
+        return true;
+    return scroll.nMax <= 0 ||
+        scroll.nPos + (int)scroll.nPage >= scroll.nMax - 2;
+}
+
+static LRESULT CALLBACK transcript_wndproc(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    AiPanel *panel = (AiPanel *)GetPropW(hwnd, L"PuTTYAI.TranscriptPanel");
+    LRESULT result;
+    unsigned action;
+
+    if (!panel)
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+
+    if (message == EM_SCROLL || message == WM_VSCROLL) {
+        action = message == EM_SCROLL ?
+            (unsigned)wParam : LOWORD(wParam);
+        result = CallWindowProcW(
+            panel->transcript_wndproc, hwnd, message, wParam, lParam);
+        if (action == SB_BOTTOM) {
+            panel->transcript_scroll_locked = false;
+        } else if (action == SB_TOP || action == SB_LINEUP ||
+                   action == SB_PAGEUP || action == SB_THUMBPOSITION ||
+                   action == SB_THUMBTRACK) {
+            panel->transcript_scroll_locked = true;
+        } else if (transcript_is_at_bottom(panel)) {
+            panel->transcript_scroll_locked = false;
+        }
+        return result;
+    }
+
+    if (message == WM_MOUSEWHEEL) {
+        if ((short)HIWORD(wParam) > 0)
+            panel->transcript_scroll_locked = true;
+        result = CallWindowProcW(
+            panel->transcript_wndproc, hwnd, message, wParam, lParam);
+        if ((short)HIWORD(wParam) < 0 && transcript_is_at_bottom(panel))
+            panel->transcript_scroll_locked = false;
+        return result;
+    }
+
+    if (message == WM_KEYDOWN) {
+        if (wParam == VK_HOME || wParam == VK_PRIOR || wParam == VK_UP)
+            panel->transcript_scroll_locked = true;
+        else if (wParam == VK_END)
+            panel->transcript_scroll_locked = false;
+    }
+
+    return CallWindowProcW(
+        panel->transcript_wndproc, hwnd, message, wParam, lParam);
+}
+
+static LRESULT CALLBACK context_switch_wndproc(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    AiPanel *panel = (AiPanel *)GetPropW(hwnd, L"PuTTYAI.ContextPanel");
+    if (panel) {
+        if (message == BM_GETCHECK)
+            return panel->include_context_checked ?
+                BST_CHECKED : BST_UNCHECKED;
+        if (message == BM_SETCHECK) {
+            panel->include_context_checked = wParam == BST_CHECKED;
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        return CallWindowProcW(
+            panel->context_switch_wndproc, hwnd, message, wParam, lParam);
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+static LRESULT CALLBACK frame_button_wndproc(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    AiPanel *panel = (AiPanel *)GetPropW(hwnd, L"PuTTYAI.FrameButtonPanel");
+    if (!panel)
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+
+    if (message == WM_MOUSEMOVE && panel->hovered_frame_button != hwnd) {
+        TRACKMOUSEEVENT tracking;
+        if (panel->hovered_frame_button)
+            InvalidateRect(panel->hovered_frame_button, NULL, TRUE);
+        panel->hovered_frame_button = hwnd;
+        memset(&tracking, 0, sizeof(tracking));
+        tracking.cbSize = sizeof(tracking);
+        tracking.dwFlags = TME_LEAVE;
+        tracking.hwndTrack = hwnd;
+        TrackMouseEvent(&tracking);
+        InvalidateRect(hwnd, NULL, TRUE);
+    } else if (message == WM_MOUSELEAVE) {
+        if (panel->hovered_frame_button == hwnd)
+            panel->hovered_frame_button = NULL;
+        InvalidateRect(hwnd, NULL, TRUE);
+    }
+
+    return CallWindowProcW(
+        panel->frame_button_wndproc, hwnd, message, wParam, lParam);
+}
+
+static void subclass_frame_button(AiPanel *panel, HWND button)
+{
+    WNDPROC original;
+    if (!button)
+        return;
+    SetPropW(button, L"PuTTYAI.FrameButtonPanel", (HANDLE)panel);
+    original = (WNDPROC)SetWindowLongPtrW(
+        button, GWLP_WNDPROC, (LONG_PTR)frame_button_wndproc);
+    if (!panel->frame_button_wndproc)
+        panel->frame_button_wndproc = original;
+}
+
+typedef struct SessionEnumContext {
+    AiPanel *panel;
+    size_t count;
+} SessionEnumContext;
 
 struct AiRequest {
     HWND target;
@@ -125,6 +310,445 @@ struct AiResponse {
 struct AiStreamChunk {
     char *text;
 };
+
+static int session_tab_width(const AiPanel *panel, int available)
+{
+    int width = 200;
+    if (!panel->session_count)
+        return width;
+    if ((int)panel->session_count * width > available - AI_HOST_ACTION_WIDTH)
+        width = (available - AI_HOST_ACTION_WIDTH) /
+            (int)panel->session_count;
+    if (width < 140)
+        width = 140;
+    return width;
+}
+
+static int host_actions_left(const RECT *client)
+{
+    int left = client->right - AI_FRAME_CONTROLS_WIDTH -
+        AI_HOST_ACTION_WIDTH;
+    return left < 48 ? 48 : left;
+}
+
+static BOOL CALLBACK enum_session_window(HWND hwnd, LPARAM lParam)
+{
+    SessionEnumContext *context = (SessionEnumContext *)lParam;
+    AiPanel *panel = context->panel;
+    wchar_t title[128];
+    DWORD_PTR text_result;
+    size_t len;
+
+    if (context->count >= AI_MAX_SESSIONS ||
+        !GetPropW(hwnd, L"PuTTYAI.SessionWindow") ||
+        !IsWindow(hwnd))
+        return TRUE;
+
+    {
+        HWND metadata = GetDlgItem(hwnd, IDC_AI_SESSION_METADATA);
+        title[0] = L'\0';
+        if (metadata)
+            SendMessageTimeoutW(
+                metadata, WM_GETTEXT, lenof(title), (LPARAM)title,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &text_result);
+    }
+    if (!title[0])
+        GetWindowTextW(hwnd, title, lenof(title));
+    if (!title[0])
+        lstrcpynW(title, L"SSH 会话", lenof(title));
+    len = wcslen(title);
+    if (len > 8 && !_wcsicmp(title + len - 8, L" - PuTTY"))
+        title[len - 8] = L'\0';
+
+    panel->session_windows[context->count] = hwnd;
+    lstrcpynW(
+        panel->session_titles[context->count], title,
+        lenof(panel->session_titles[context->count]));
+    context->count++;
+    return TRUE;
+}
+
+static void refresh_host_sessions(AiPanel *panel)
+{
+    SessionEnumContext context;
+    size_t i, j;
+
+    if (!panel || !panel->host_tabs)
+        return;
+    memset(panel->session_windows, 0, sizeof(panel->session_windows));
+    memset(panel->session_titles, 0, sizeof(panel->session_titles));
+    context.panel = panel;
+    context.count = 0;
+    EnumWindows(enum_session_window, (LPARAM)&context);
+    panel->session_count = context.count;
+
+    for (i = 0; i < panel->session_count; i++) {
+        for (j = i + 1; j < panel->session_count; j++) {
+            if ((UINT_PTR)panel->session_windows[j] <
+                (UINT_PTR)panel->session_windows[i]) {
+                HWND window = panel->session_windows[i];
+                wchar_t title[128];
+                panel->session_windows[i] = panel->session_windows[j];
+                panel->session_windows[j] = window;
+                memcpy(title, panel->session_titles[i], sizeof(title));
+                memcpy(
+                    panel->session_titles[i], panel->session_titles[j],
+                    sizeof(panel->session_titles[i]));
+                memcpy(
+                    panel->session_titles[j], title,
+                    sizeof(panel->session_titles[j]));
+            }
+        }
+    }
+    InvalidateRect(panel->host_tabs, NULL, FALSE);
+}
+
+static void draw_monitor_icon(HDC dc, int x, int y, COLORREF colour)
+{
+    HPEN pen = CreatePen(PS_SOLID, 2, colour);
+    HPEN old_pen = SelectObject(dc, pen);
+    HBRUSH old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    Rectangle(dc, x, y, x + 20, y + 14);
+    MoveToEx(dc, x + 10, y + 14, NULL);
+    LineTo(dc, x + 10, y + 18);
+    MoveToEx(dc, x + 5, y + 18, NULL);
+    LineTo(dc, x + 15, y + 18);
+    SelectObject(dc, old_brush);
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
+}
+
+static void draw_info_icon(HDC dc, int x, int y, unsigned kind)
+{
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(184, 218, 255));
+    HPEN old_pen = SelectObject(dc, pen);
+    HBRUSH old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    if (kind == 1) {
+        HBRUSH person = CreateSolidBrush(RGB(245, 247, 250));
+        SelectObject(dc, GetStockObject(NULL_PEN));
+        SelectObject(dc, person);
+        Ellipse(dc, x + 5, y, x + 13, y + 8);
+        RoundRect(dc, x + 2, y + 9, x + 16, y + 18, 6, 6);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+        DeleteObject(person);
+    } else if (kind == 3) {
+        Ellipse(dc, x + 1, y + 1, x + 17, y + 17);
+        Ellipse(dc, x + 6, y + 6, x + 12, y + 12);
+        MoveToEx(dc, x + 9, y, NULL); LineTo(dc, x + 9, y + 4);
+        MoveToEx(dc, x + 9, y + 14, NULL); LineTo(dc, x + 9, y + 18);
+    } else if (kind == 2) {
+        RoundRect(dc, x + 1, y + 2, x + 17, y + 17, 4, 4);
+        MoveToEx(dc, x + 5, y, NULL); LineTo(dc, x + 5, y + 5);
+        MoveToEx(dc, x + 13, y, NULL); LineTo(dc, x + 13, y + 5);
+        MoveToEx(dc, x + 4, y + 8, NULL); LineTo(dc, x + 14, y + 8);
+        Rectangle(dc, x + 5, y + 11, x + 8, y + 14);
+        Rectangle(dc, x + 11, y + 11, x + 14, y + 14);
+    } else {
+        RoundRect(dc, x + 1, y + 1, x + 17, y + 17, 4, 4);
+        if (kind == 4) {
+            Ellipse(dc, x + 6, y + 6, x + 12, y + 12);
+        } else {
+            Ellipse(dc, x + 7, y + 5, x + 11, y + 9);
+            MoveToEx(dc, x + 9, y + 9, NULL); LineTo(dc, x + 9, y + 14);
+        }
+    }
+    SelectObject(dc, old_brush);
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
+}
+
+static void activate_session_window(HWND target)
+{
+    HWND foreground = GetForegroundWindow();
+    DWORD current_thread = GetCurrentThreadId();
+    DWORD target_thread = GetWindowThreadProcessId(target, NULL);
+    DWORD foreground_thread = foreground ?
+        GetWindowThreadProcessId(foreground, NULL) : 0;
+    bool attached_target = target_thread && target_thread != current_thread &&
+        AttachThreadInput(current_thread, target_thread, TRUE);
+    bool attached_foreground = foreground_thread &&
+        foreground_thread != current_thread &&
+        foreground_thread != target_thread &&
+        AttachThreadInput(current_thread, foreground_thread, TRUE);
+
+    if (IsIconic(target))
+        ShowWindowAsync(target, SW_RESTORE);
+    SetWindowPos(
+        target, HWND_TOP, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    BringWindowToTop(target);
+    SetForegroundWindow(target);
+    SetActiveWindow(target);
+    SetFocus(target);
+
+    if (attached_foreground)
+        AttachThreadInput(current_thread, foreground_thread, FALSE);
+    if (attached_target)
+        AttachThreadInput(current_thread, target_thread, FALSE);
+}
+
+static LRESULT CALLBACK host_tabs_wndproc(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    AiPanel *panel = (AiPanel *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    if (message == WM_NCCREATE) {
+        CREATESTRUCTW *create = (CREATESTRUCTW *)lParam;
+        panel = (AiPanel *)create->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)panel);
+    }
+
+    switch (message) {
+      case WM_ERASEBKGND:
+        return 1;
+      case WM_PAINT:
+        if (panel) {
+            PAINTSTRUCT paint;
+            RECT client, tab;
+            HDC dc = BeginPaint(hwnd, &paint);
+            HBRUSH background = CreateSolidBrush(RGB(0, 0, 0));
+            HBRUSH active = CreateSolidBrush(RGB(3, 3, 3));
+            HBRUSH inactive = CreateSolidBrush(RGB(0, 0, 0));
+            HBRUSH info = CreateSolidBrush(RGB(15, 57, 130));
+            HBRUSH online = CreateSolidBrush(RGB(33, 194, 82));
+            HFONT old_font;
+            int actions_left, old_mode, width;
+            COLORREF old_colour;
+            size_t i;
+
+            GetClientRect(hwnd, &client);
+            FillRect(dc, &client, background);
+            actions_left = host_actions_left(&client);
+            width = session_tab_width(panel, actions_left - 48);
+            old_font = SelectObject(dc, panel->ui_font);
+            old_mode = SetBkMode(dc, TRANSPARENT);
+            old_colour = SetTextColor(dc, RGB(245, 247, 250));
+            draw_monitor_icon(dc, 14, 13, RGB(61, 151, 255));
+            for (i = 0; i < panel->session_count; i++) {
+                tab.left = 48 + (int)i * width;
+                tab.right = tab.left + width;
+                tab.top = 0;
+                tab.bottom = AI_HOST_TABS_HEADER_HEIGHT;
+                FillRect(
+                    dc, &tab,
+                    panel->session_windows[i] == panel->wgs->term_hwnd ?
+                        active : inactive);
+                if (panel->session_windows[i] == panel->wgs->term_hwnd) {
+                    RECT underline = {
+                        tab.left, AI_HOST_TABS_HEADER_HEIGHT - 2,
+                        tab.right, AI_HOST_TABS_HEADER_HEIGHT,
+                    };
+                    HBRUSH blue = CreateSolidBrush(RGB(45, 126, 247));
+                    FillRect(dc, &underline, blue);
+                    DeleteObject(blue);
+                }
+                {
+                    RECT dot = { tab.left + 13, 18, tab.left + 23, 28 };
+                    HBRUSH old_dot = SelectObject(dc, online);
+                    HPEN old_dot_pen = SelectObject(
+                        dc, GetStockObject(NULL_PEN));
+                    Ellipse(dc, dot.left, dot.top, dot.right, dot.bottom);
+                    SelectObject(dc, old_dot_pen);
+                    SelectObject(dc, old_dot);
+                }
+                tab.left += 33;
+                tab.right -= 25;
+                tab.top = 0;
+                DrawTextW(
+                    dc, panel->session_titles[i], -1, &tab,
+                    DT_SINGLELINE | DT_VCENTER | DT_LEFT |
+                    DT_END_ELLIPSIS | DT_NOPREFIX);
+                MoveToEx(dc, tab.right + 7, 19, NULL);
+                LineTo(dc, tab.right + 11, 23);
+                LineTo(dc, tab.right + 7, 27);
+            }
+            {
+                int plus_x = 48 + (int)panel->session_count * width + 22;
+                HPEN plus_pen = CreatePen(PS_SOLID, 2, RGB(198, 205, 214));
+                HPEN old_pen = SelectObject(dc, plus_pen);
+                MoveToEx(dc, plus_x - 7, 22, NULL); LineTo(dc, plus_x + 7, 22);
+                MoveToEx(dc, plus_x, 15, NULL); LineTo(dc, plus_x, 29);
+                SelectObject(dc, old_pen);
+                DeleteObject(plus_pen);
+            }
+            {
+                int gear_x = actions_left + AI_HOST_ACTION_WIDTH / 2;
+                HPEN gear_pen = CreatePen(PS_SOLID, 2, RGB(198, 205, 214));
+                HPEN old_pen = SelectObject(dc, gear_pen);
+                HBRUSH old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Ellipse(dc, gear_x - 8, 14, gear_x + 8, 30);
+                Ellipse(dc, gear_x - 3, 19, gear_x + 3, 25);
+                MoveToEx(dc, gear_x, 11, NULL); LineTo(dc, gear_x, 15);
+                MoveToEx(dc, gear_x, 29, NULL); LineTo(dc, gear_x, 33);
+                MoveToEx(dc, gear_x - 11, 22, NULL); LineTo(dc, gear_x - 7, 22);
+                MoveToEx(dc, gear_x + 7, 22, NULL); LineTo(dc, gear_x + 11, 22);
+                MoveToEx(dc, gear_x - 8, 14, NULL); LineTo(dc, gear_x - 6, 17);
+                MoveToEx(dc, gear_x + 6, 27, NULL); LineTo(dc, gear_x + 8, 30);
+                MoveToEx(dc, gear_x + 8, 14, NULL); LineTo(dc, gear_x + 6, 17);
+                MoveToEx(dc, gear_x - 6, 27, NULL); LineTo(dc, gear_x - 8, 30);
+                SelectObject(dc, old_brush);
+                SelectObject(dc, old_pen);
+                DeleteObject(gear_pen);
+            }
+            {
+                SYSTEMTIME now;
+                wchar_t labels[5][192];
+                static const int icon_anchors[5] = {
+                    32, 259, 492, 726, 965,
+                };
+                static const int text_anchors[5] = {
+                    58, 283, 518, 753, 990,
+                };
+                RECT info_bar = {
+                    0, AI_HOST_TABS_HEADER_HEIGHT,
+                    client.right, client.bottom,
+                };
+                GetLocalTime(&now);
+                _snwprintf(labels[0], lenof(labels[0]), L"主机：%s",
+                           panel->current_host[0] ? panel->current_host : L"-");
+                _snwprintf(labels[1], lenof(labels[1]), L"用户：%s",
+                           panel->current_user[0] ? panel->current_user : L"-");
+                lstrcpynW(labels[2], L"会话：默认", lenof(labels[2]));
+                lstrcpynW(labels[3], L"编码：UTF-8", lenof(labels[3]));
+                _snwprintf(
+                    labels[4], lenof(labels[4]),
+                    L"时间：%04u-%02u-%02u %02u:%02u:%02u",
+                    now.wYear, now.wMonth, now.wDay,
+                    now.wHour, now.wMinute, now.wSecond);
+                for (i = 0; i < 5; i++)
+                    labels[i][lenof(labels[i]) - 1] = L'\0';
+                FillRect(dc, &info_bar, info);
+                SelectObject(dc, panel->title_font);
+                for (i = 0; i < 5; i++) {
+                    int icon_x =
+                        (client.right * icon_anchors[i] + 614) / 1228;
+                    int text_x =
+                        (client.right * text_anchors[i] + 614) / 1228;
+                    int right_x = i + 1 < 5 ?
+                        (client.right * icon_anchors[i + 1] + 614) / 1228 - 8 :
+                        client.right - 8;
+                    RECT label_rect = {
+                        text_x,
+                        AI_HOST_TABS_HEADER_HEIGHT,
+                        right_x,
+                        client.bottom,
+                    };
+                    draw_info_icon(
+                        dc, icon_x,
+                        AI_HOST_TABS_HEADER_HEIGHT + 14, (unsigned)i);
+                    DrawTextW(
+                        dc, labels[i], -1, &label_rect,
+                        DT_SINGLELINE | DT_VCENTER | DT_LEFT |
+                        DT_END_ELLIPSIS | DT_NOPREFIX);
+                }
+            }
+            SetTextColor(dc, old_colour);
+            SetBkMode(dc, old_mode);
+            SelectObject(dc, old_font);
+            DeleteObject(inactive);
+            DeleteObject(active);
+            DeleteObject(online);
+            DeleteObject(info);
+            DeleteObject(background);
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        break;
+      case WM_LBUTTONDOWN:
+        if (panel) {
+            RECT client;
+            int x = (int)(short)LOWORD(lParam);
+            int y = (int)(short)HIWORD(lParam);
+            int actions_left, width;
+            GetClientRect(hwnd, &client);
+            actions_left = host_actions_left(&client);
+            width = session_tab_width(panel, actions_left - 48);
+            if (y <= 5 && !IsZoomed(panel->wgs->term_hwnd)) {
+                ReleaseCapture();
+                SendMessageW(
+                    panel->wgs->term_hwnd, WM_NCLBUTTONDOWN, HTTOP, 0);
+                return 0;
+            }
+            if (y < AI_HOST_TABS_HEADER_HEIGHT &&
+                (x < 48 ||
+                 (x >= 48 + (int)panel->session_count * width + 48 &&
+                   x < actions_left))) {
+                ReleaseCapture();
+                SendMessageW(
+                    panel->wgs->term_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+                return 0;
+            }
+        }
+        break;
+      case WM_LBUTTONDBLCLK:
+        if (panel && (int)(short)HIWORD(lParam) <
+                         AI_HOST_TABS_HEADER_HEIGHT) {
+            ShowWindow(
+                panel->wgs->term_hwnd,
+                IsZoomed(panel->wgs->term_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            return 0;
+        }
+        break;
+      case WM_LBUTTONUP:
+        if (panel && panel->session_count) {
+            RECT client;
+            int actions_left, width, index;
+            int x = (int)(short)LOWORD(lParam);
+            HWND target;
+            GetClientRect(hwnd, &client);
+            actions_left = host_actions_left(&client);
+            width = session_tab_width(panel, actions_left - 48);
+            if ((int)(short)HIWORD(lParam) >= AI_HOST_TABS_HEADER_HEIGHT)
+                return 0;
+            if (x >= actions_left &&
+                x < client.right - AI_FRAME_CONTROLS_WIDTH) {
+                SendMessageW(
+                    panel->wgs->term_hwnd, WM_SYSCOMMAND,
+                    PUTTY_IDM_RECONFIGURE, 0);
+                return 0;
+            }
+            if (x >= 48 + (int)panel->session_count * width &&
+                x < 48 + (int)panel->session_count * width + 48) {
+                SendMessageW(
+                    panel->wgs->term_hwnd, WM_SYSCOMMAND,
+                    PUTTY_IDM_NEW_SESSION, 0);
+                return 0;
+            }
+            index = (x - 48) / width;
+            if (index >= 0 && (size_t)index < panel->session_count) {
+                target = panel->session_windows[index];
+                if (target != panel->wgs->term_hwnd && IsWindow(target)) {
+                    panel->last_activated_session = target;
+                    activate_session_window(target);
+                } else {
+                    SetFocus(panel->wgs->term_hwnd);
+                }
+            }
+            return 0;
+        }
+        break;
+      case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_HAND));
+        return TRUE;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+static bool register_host_tabs_class(void)
+{
+    WNDCLASSW wc;
+    HINSTANCE instance = GetModuleHandle(NULL);
+    if (GetClassInfoW(instance, AI_HOST_TABS_CLASS, &wc))
+        return true;
+    memset(&wc, 0, sizeof(wc));
+    wc.style = CS_DBLCLKS;
+    wc.lpfnWndProc = host_tabs_wndproc;
+    wc.hInstance = instance;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = AI_HOST_TABS_CLASS;
+    return RegisterClassW(&wc) != 0;
+}
 
 static void set_control_font(AiPanel *panel, HWND hwnd)
 {
@@ -480,33 +1104,36 @@ static RichStyle message_body_style(AiMessageKind kind)
 
 static RichStyle message_header_style(AiMessageKind kind)
 {
+    RichStyle style = rich_style(
+        L"Microsoft YaHei UI", 200, RGB(79, 86, 94),
+        RGB(244, 246, 248), CFE_BOLD);
+
     switch (kind) {
       case AI_MESSAGE_USER:
-        return rich_style(
-            L"Segoe UI", 190, RGB(255, 255, 255), RGB(0, 92, 153),
-            CFE_BOLD);
+        style.text_colour = RGB(0, 92, 153);
+        style.back_colour = RGB(232, 242, 252);
+        break;
       case AI_MESSAGE_ASSISTANT:
-        return rich_style(
-            L"Segoe UI", 190, RGB(255, 255, 255), RGB(36, 105, 92),
-            CFE_BOLD);
+        style.text_colour = RGB(36, 105, 92);
+        style.back_colour = RGB(255, 255, 255);
+        break;
       case AI_MESSAGE_ERROR:
-        return rich_style(
-            L"Segoe UI", 190, RGB(255, 255, 255), RGB(171, 49, 43),
-            CFE_BOLD);
+        style.text_colour = RGB(171, 49, 43);
+        style.back_colour = RGB(255, 239, 238);
+        break;
       default:
-        return rich_style(
-            L"Segoe UI", 190, RGB(255, 255, 255), RGB(79, 86, 94),
-            CFE_BOLD);
+        break;
     }
+    return style;
 }
 
 static const wchar_t *message_label(AiMessageKind kind)
 {
     switch (kind) {
-      case AI_MESSAGE_USER: return L" 你 ";
-      case AI_MESSAGE_ASSISTANT: return L" AI 助手 ";
-      case AI_MESSAGE_ERROR: return L" 错误 ";
-      default: return L" PuTTY AI ";
+      case AI_MESSAGE_USER: return L"你";
+      case AI_MESSAGE_ASSISTANT: return L"AI 助手";
+      case AI_MESSAGE_ERROR: return L"错误";
+      default: return L"PuTTY AI";
     }
 }
 
@@ -527,18 +1154,33 @@ static void rich_set_format(HWND hwnd, const RichStyle *style)
 
 static void rich_finish_update(AiPanel *panel)
 {
-    LONG end = GetWindowTextLengthW(panel->transcript);
+    LONG end = rich_text_length(panel->transcript);
     SendMessageW(panel->transcript, EM_SETSEL, end, end);
     SendMessageW(panel->transcript, EM_SCROLLCARET, 0, 0);
+    panel->transcript_scroll_locked = false;
     RedrawWindow(
         panel->transcript, NULL, NULL,
-        RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+        RDW_INVALIDATE | RDW_NOERASE);
+}
+
+static RichStyle message_separator_style(void)
+{
+    return rich_style(
+        L"Segoe UI", 120, RGB(190, 202, 216), RGB(255, 255, 255), 0);
 }
 
 static void rich_begin_update(AiPanel *panel)
 {
-    if (panel->update_depth++ == 0)
+    if (panel->update_depth++ == 0) {
+        panel->update_follow_tail = !panel->transcript_scroll_locked;
+        SendMessageW(
+            panel->transcript, EM_GETSCROLLPOS, 0,
+            (LPARAM)&panel->update_scroll);
+        SendMessageW(
+            panel->transcript, EM_EXGETSEL, 0,
+            (LPARAM)&panel->update_selection);
         SendMessageW(panel->transcript, WM_SETREDRAW, FALSE, 0);
+    }
 }
 
 static void rich_end_update(AiPanel *panel)
@@ -546,23 +1188,44 @@ static void rich_end_update(AiPanel *panel)
     if (!panel->update_depth || --panel->update_depth != 0)
         return;
     SendMessageW(panel->transcript, WM_SETREDRAW, TRUE, 0);
-    rich_finish_update(panel);
+    if (panel->update_follow_tail) {
+        rich_finish_update(panel);
+    } else {
+        LONG end = rich_text_length(panel->transcript);
+        if (panel->update_selection.cpMin > end)
+            panel->update_selection.cpMin = end;
+        if (panel->update_selection.cpMax > end)
+            panel->update_selection.cpMax = end;
+        SendMessageW(
+            panel->transcript, EM_EXSETSEL, 0,
+            (LPARAM)&panel->update_selection);
+        SendMessageW(
+            panel->transcript, EM_SETSCROLLPOS, 0,
+            (LPARAM)&panel->update_scroll);
+        RedrawWindow(
+            panel->transcript, NULL, NULL,
+            RDW_INVALIDATE | RDW_NOERASE);
+    }
 }
 
 static void rich_append_wide_style(
     AiPanel *panel, const wchar_t *text, const RichStyle *style)
 {
-    LONG start = GetWindowTextLengthW(panel->transcript);
+    bool own_update = panel->update_depth == 0;
+    LONG start = rich_text_length(panel->transcript);
     LONG end;
+
+    if (own_update)
+        rich_begin_update(panel);
     SendMessageW(panel->transcript, EM_SETSEL, start, start);
     SendMessageW(
         panel->transcript, EM_REPLACESEL, FALSE, (LPARAM)text);
-    end = GetWindowTextLengthW(panel->transcript);
+    end = rich_text_length(panel->transcript);
     SendMessageW(panel->transcript, EM_SETSEL, start, end);
     rich_set_format(panel->transcript, style);
     SendMessageW(panel->transcript, EM_SETSEL, end, end);
-    if (!panel->update_depth)
-        rich_finish_update(panel);
+    if (own_update)
+        rich_end_update(panel);
 }
 
 static void rich_set_default_format(HWND hwnd)
@@ -851,10 +1514,11 @@ static void append_markdown(
                 code = false;
             } else {
                 RichStyle code_style = *body;
-                code_style.face = L"Consolas";
-                code_style.height = 185;
-                code_style.text_colour = RGB(31, 58, 70);
-                code_style.back_colour = RGB(232, 238, 242);
+                code_style.face = L"Segoe UI";
+                code_style.height = 190;
+                code_style.text_colour = RGB(27, 31, 36);
+                code_style.back_colour = RGB(255, 255, 255);
+                code_style.effects |= CFE_BOLD;
                 rich_append_utf8_n(panel, p, len, &code_style);
                 rich_append_wide_style(panel, L"\r\n", &code_style);
             }
@@ -991,8 +1655,14 @@ static void append_message_header(AiPanel *panel, AiMessageKind kind)
 {
     RichStyle body = message_body_style(kind);
     RichStyle header = message_header_style(kind);
-    if (GetWindowTextLengthW(panel->transcript) > 0)
-        rich_append_wide_style(panel, L"\r\n", &body);
+    RichStyle separator = message_separator_style();
+    if (rich_text_length(panel->transcript) > 0) {
+        rich_append_wide_style(
+            panel, L"\r\n\x2500\x2500\x2500\x2500\x2500\x2500\x2500\x2500"
+                   L"\x2500\x2500\x2500\x2500\x2500\x2500\x2500\x2500"
+                   L"\x2500\x2500\x2500\x2500\x2500\x2500\x2500\x2500"
+                   L"\r\n", &separator);
+    }
     rich_append_wide_style(panel, message_label(kind), &header);
     rich_append_wide_style(panel, L"\r\n", &body);
 }
@@ -1034,7 +1704,7 @@ static void stream_markdown_append(AiPanel *panel, const char *text)
 static void render_stream_markdown(AiPanel *panel, const char *markdown)
 {
     RichStyle body = message_body_style(AI_MESSAGE_ASSISTANT);
-    LONG end = GetWindowTextLengthW(panel->transcript);
+    LONG end = rich_text_length(panel->transcript);
     rich_begin_update(panel);
     SendMessageW(panel->transcript, EM_SETSEL, panel->stream_start, end);
     SendMessageW(
@@ -1752,36 +2422,123 @@ static char *extract_command(const char *markdown)
     return NULL;
 }
 
+static void locate_candidate_range(AiPanel *panel, const char *markdown)
+{
+    const char *p = markdown;
+    panel->candidate_start = panel->candidate_end = -1;
+
+    while ((p = strstr(p, "```")) != NULL) {
+        const char *language = p + 3;
+        const char *body = strchr(language, '\n');
+        const char *end, *line, *line_end;
+        char *needle_utf8;
+        wchar_t *needle;
+        FINDTEXTEXW search;
+
+        if (!body)
+            return;
+        if (!command_language(language, (size_t)(body - language))) {
+            p = body + 1;
+            continue;
+        }
+        body++;
+        end = strstr(body, "```");
+        if (!end)
+            return;
+        line = body;
+        while (line < end) {
+            line_end = memchr(line, '\n', (size_t)(end - line));
+            if (!line_end)
+                line_end = end;
+            while (line < line_end && isspace((unsigned char)*line))
+                line++;
+            while (line_end > line &&
+                   isspace((unsigned char)line_end[-1]))
+                line_end--;
+            if (line_end > line && *line != '#')
+                break;
+            line = line_end < end ? line_end + 1 : end;
+        }
+        if (line >= end || line_end <= line)
+            return;
+        if (line_end - line >= 2 && line[0] == '$' && line[1] == ' ')
+            line += 2;
+
+        needle_utf8 = snewn((size_t)(line_end - line) + 1, char);
+        memcpy(needle_utf8, line, (size_t)(line_end - line));
+        needle_utf8[line_end - line] = '\0';
+        needle = dup_mb_to_wc(CP_UTF8, needle_utf8);
+        memset(&search, 0, sizeof(search));
+        search.chrg.cpMin = panel->stream_start;
+        search.chrg.cpMax = -1;
+        search.lpstrText = needle;
+        if (SendMessageW(
+                panel->transcript, EM_FINDTEXTEXW,
+                FR_DOWN, (LPARAM)&search) != -1) {
+            panel->candidate_start = search.chrgText.cpMin;
+            panel->candidate_end = search.chrgText.cpMax;
+        }
+        sfree(needle);
+        sfree(needle_utf8);
+        return;
+    }
+}
+
+static void update_candidate_hover(AiPanel *panel, LPARAM mouse_position)
+{
+    POINTL point;
+    LRESULT index;
+
+    if (!panel->candidate_command || panel->candidate_start < 0) {
+        ShowWindow(panel->apply, SW_HIDE);
+        return;
+    }
+    point.x = (short)LOWORD(mouse_position);
+    point.y = (short)HIWORD(mouse_position);
+    index = SendMessageW(
+        panel->transcript, EM_CHARFROMPOS, 0, (LPARAM)&point);
+    if ((LONG)index >= panel->candidate_start &&
+        (LONG)index <= panel->candidate_end) {
+        RECT transcript_rect;
+        POINTL command_point;
+        command_point.x = command_point.y = 0;
+        SendMessageW(
+            panel->transcript, EM_POSFROMCHAR,
+            (WPARAM)&command_point, panel->candidate_start);
+        GetWindowRect(panel->transcript, &transcript_rect);
+        MapWindowPoints(
+            NULL, panel->wgs->term_hwnd,
+            (POINT *)&transcript_rect, 2);
+        SetWindowPos(
+            panel->apply, HWND_TOP,
+            transcript_rect.right - 132,
+            transcript_rect.top + command_point.y - 3,
+            118, 28, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    } else if (GetCapture() != panel->apply) {
+        ShowWindow(panel->apply, SW_HIDE);
+    }
+}
+
 static void set_candidate(AiPanel *panel, const char *response)
 {
     char *command = extract_command(response);
     sfree(panel->candidate_command);
     panel->candidate_command = NULL;
     panel->candidate_dangerous = false;
+    panel->candidate_start = panel->candidate_end = -1;
     EnableWindow(panel->apply, FALSE);
-    SetWindowTextW(panel->apply, L"填入命令");
+    ShowWindow(panel->apply, SW_HIDE);
+    SetWindowTextW(panel->apply, L"填入终端");
 
     if (command && command[0]) {
-        RichStyle notice;
         panel->candidate_command = dup_mb_to_wc(CP_UTF8, command);
         panel->candidate_dangerous = command_is_dangerous(command);
+        locate_candidate_range(panel, response);
         EnableWindow(panel->apply, TRUE);
         SetWindowTextW(
             panel->apply,
-            panel->candidate_dangerous ? L"检查高风险命令" :
-                                         L"填入命令");
-        notice = rich_style(
-            L"Segoe UI", 180,
-            panel->candidate_dangerous ? RGB(154, 62, 20) : RGB(31, 93, 80),
-            panel->candidate_dangerous ? RGB(255, 244, 232) :
-                                         RGB(238, 247, 244),
-            CFE_BOLD);
-        rich_append_wide_style(
-            panel,
             panel->candidate_dangerous ?
-                L"检测到可能有危险的命令，填入前需要两次确认。\r\n\r\n" :
-                L"检测到候选命令，请检查后再填入终端。\r\n\r\n",
-            &notice);
+                L"检查并填入" : L"填入终端");
     }
     sfree(command);
 }
@@ -1884,6 +2641,7 @@ static void start_request(AiPanel *panel)
     audit_details[sizeof(audit_details) - 1] = '\0';
     audit_event(panel, "request-start", audit_details);
 
+    set_candidate(panel, "");
     reset_stream_markdown(panel);
     append_turn(panel, AI_MESSAGE_USER, request->question);
     SetWindowTextW(panel->prompt, L"");
@@ -1903,10 +2661,9 @@ static void start_request(AiPanel *panel)
     } else {
         CloseHandle(thread);
         rich_begin_update(panel);
-        panel->stream_message_start =
-            GetWindowTextLengthW(panel->transcript);
+        panel->stream_message_start = rich_text_length(panel->transcript);
         append_message_header(panel, AI_MESSAGE_ASSISTANT);
-        panel->stream_start = GetWindowTextLengthW(panel->transcript);
+        panel->stream_start = rich_text_length(panel->transcript);
         rich_end_update(panel);
     }
     sfree(question_w);
@@ -1917,13 +2674,51 @@ int ai_panel_default_width(void)
     return AI_PANEL_WIDTH;
 }
 
+int ai_panel_terminal_top(void)
+{
+    return AI_HOST_TABS_HEIGHT;
+}
+
 AiPanel *ai_panel_create(WinGuiSeat *wgs)
 {
     AiPanel *panel = snew(AiPanel);
     const wchar_t *rich_class = L"EDIT";
+    wchar_t session_label[192];
+    wchar_t *host_w, *username_w;
+    const char *host, *username;
     memset(panel, 0, sizeof(*panel));
     panel->wgs = wgs;
-    panel->ui_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    panel->candidate_start = panel->candidate_end = -1;
+    panel->ui_font = CreateFontW(
+        -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    panel->title_font = CreateFontW(
+        -17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!panel->ui_font)
+        panel->ui_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    if (!panel->title_font)
+        panel->title_font = panel->ui_font;
+    panel->panel_brush = CreateSolidBrush(RGB(246, 248, 251));
+    host = conf_get_str(wgs->conf, CONF_host);
+    username = conf_get_str_ambi(wgs->conf, CONF_username, NULL);
+    host_w = dup_mb_to_wc(CP_UTF8, host && host[0] ? host : "-");
+    username_w = dup_mb_to_wc(
+        CP_UTF8, username && username[0] ? username : "-");
+    lstrcpynW(
+        panel->current_host, host_w,
+        lenof(panel->current_host));
+    lstrcpynW(
+        panel->current_user, username_w,
+        lenof(panel->current_user));
+    sfree(username_w);
+    sfree(host_w);
+    _snwprintf(
+        session_label, lenof(session_label), L"%s (%s)",
+        panel->current_host, panel->current_user);
+    session_label[lenof(session_label) - 1] = L'\0';
     panel->rich_edit_module = LoadLibraryW(L"Msftedit.dll");
     if (panel->rich_edit_module) {
         rich_class = RICHEDIT50W;
@@ -1933,38 +2728,96 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
             rich_class = L"RichEdit20W";
     }
 
+    SetPropW(wgs->term_hwnd, L"PuTTYAI.SessionWindow", (HANDLE)1);
+    if (register_host_tabs_class()) {
+        panel->host_tabs = CreateWindowExW(
+            0, AI_HOST_TABS_CLASS, L"",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            0, 0, 10, AI_HOST_TABS_HEIGHT, wgs->term_hwnd,
+            (HMENU)(INT_PTR)IDC_AI_HOST_TABS, GetModuleHandle(NULL), panel);
+    }
+
     panel->background = make_control(
-        panel, 0, L"STATIC", L"", SS_WHITERECT, IDC_AI_BACKGROUND);
+        panel, 0, L"STATIC", L"", SS_LEFT, IDC_AI_BACKGROUND);
+    panel->left_separator = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW, IDC_AI_LEFT_SEPARATOR);
+    panel->top_separator = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW, IDC_AI_TOP_SEPARATOR);
+    panel->prompt_border = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW, IDC_AI_PROMPT_BORDER);
+    panel->outer_top = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW | WS_DISABLED,
+        IDC_AI_OUTER_TOP);
+    panel->outer_bottom = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW | WS_DISABLED,
+        IDC_AI_OUTER_BOTTOM);
+    panel->outer_left = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW | WS_DISABLED,
+        IDC_AI_OUTER_LEFT);
+    panel->outer_right = make_control(
+        panel, 0, L"STATIC", L"", SS_OWNERDRAW | WS_DISABLED,
+        IDC_AI_OUTER_RIGHT);
+    panel->session_metadata = make_control(
+        panel, 0, L"STATIC", session_label, SS_LEFT,
+        IDC_AI_SESSION_METADATA);
+    ShowWindow(panel->session_metadata, SW_HIDE);
     panel->title = make_control(
         panel, 0, L"STATIC", L"PuTTY AI", SS_LEFT, IDC_AI_TITLE);
+    SendMessageW(panel->title, WM_SETFONT, (WPARAM)panel->title_font, TRUE);
     panel->status = make_control(
-        panel, 0, L"STATIC", L"就绪", SS_LEFT | SS_NOPREFIX,
+        panel, 0, L"STATIC", L"准备就绪", SS_LEFT | SS_NOPREFIX,
         IDC_AI_STATUS);
     panel->settings = make_control(
-        panel, 0, L"BUTTON", L"设置", BS_PUSHBUTTON, IDC_AI_SETTINGS);
+        panel, 0, L"BUTTON", L"设置", BS_OWNERDRAW, IDC_AI_SETTINGS);
+    panel->minimize = make_control(
+        panel, 0, L"BUTTON", L"最小化", BS_OWNERDRAW, IDC_AI_MINIMIZE);
+    panel->maximize = make_control(
+        panel, 0, L"BUTTON", L"最大化或还原", BS_OWNERDRAW,
+        IDC_AI_MAXIMIZE);
+    panel->close = make_control(
+        panel, 0, L"BUTTON", L"关闭", BS_OWNERDRAW, IDC_AI_CLOSE);
+    subclass_frame_button(panel, panel->minimize);
+    subclass_frame_button(panel, panel->maximize);
+    subclass_frame_button(panel, panel->close);
     panel->transcript = make_control(
-        panel, WS_EX_CLIENTEDGE, rich_class, L"",
-        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
+        panel, 0, rich_class, L"",
+        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_NOHIDESEL |
+        WS_VSCROLL,
         IDC_AI_TRANSCRIPT);
+    SetPropW(panel->transcript, L"PuTTYAI.TranscriptPanel", (HANDLE)panel);
+    panel->transcript_wndproc = (WNDPROC)SetWindowLongPtrW(
+        panel->transcript, GWLP_WNDPROC, (LONG_PTR)transcript_wndproc);
     SendMessageW(
-        panel->transcript, EM_SETBKGNDCOLOR, 0, RGB(248, 249, 250));
+        panel->transcript, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
+    SendMessageW(
+        panel->transcript, EM_SETEVENTMASK, 0,
+        SendMessageW(panel->transcript, EM_GETEVENTMASK, 0, 0) |
+            ENM_MOUSEEVENTS | ENM_SCROLL);
     rich_set_default_format(panel->transcript);
     panel->prompt = make_control(
-        panel, WS_EX_CLIENTEDGE, L"EDIT", L"",
+        panel, 0, L"EDIT", L"",
         ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_WANTRETURN,
         IDC_AI_PROMPT);
     SendMessageW(
         panel->prompt, EM_SETCUEBANNER, TRUE,
-        (LPARAM)L"请输入要咨询的问题...");
+        (LPARAM)L"输入你的问题...");
     panel->include_context = make_control(
         panel, 0, L"BUTTON", L"附带已脱敏的终端上下文",
-        BS_AUTOCHECKBOX, IDC_AI_CONTEXT);
+        BS_OWNERDRAW, IDC_AI_CONTEXT);
+    SetPropW(
+        panel->include_context, L"PuTTYAI.ContextPanel", (HANDLE)panel);
+    panel->context_switch_wndproc = (WNDPROC)SetWindowLongPtrW(
+        panel->include_context, GWLP_WNDPROC,
+        (LONG_PTR)context_switch_wndproc);
     SendMessageW(panel->include_context, BM_SETCHECK, BST_UNCHECKED, 0);
     panel->ask = make_control(
-        panel, 0, L"BUTTON", L"发送", BS_DEFPUSHBUTTON, IDC_AI_ASK);
+        panel, 0, L"BUTTON", L"发送(S)", BS_OWNERDRAW, IDC_AI_ASK);
+    panel->clear = make_control(
+        panel, 0, L"BUTTON", L"清空对话", BS_OWNERDRAW, IDC_AI_CLEAR);
     panel->apply = make_control(
-        panel, 0, L"BUTTON", L"填入命令", BS_PUSHBUTTON, IDC_AI_APPLY);
+        panel, 0, L"BUTTON", L"填入终端", BS_OWNERDRAW, IDC_AI_APPLY);
     EnableWindow(panel->apply, FALSE);
+    ShowWindow(panel->apply, SW_HIDE);
 
     panel->endpoint_label = make_control(
         panel, 0, L"STATIC", L"Chat Completions 接口地址", SS_LEFT,
@@ -1998,10 +2851,8 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
 
     load_initial_settings(panel);
     show_settings(panel, false);
-    append_turn(
-        panel, AI_MESSAGE_SYSTEM,
-        "已就绪。终端上下文默认不发送，需要时可手动勾选。\n"
-        "检测到命令时会先请求确认，绝不会自动执行。");
+    refresh_host_sessions(panel);
+    SetTimer(wgs->term_hwnd, AI_SESSION_TIMER_ID, 1500, NULL);
     ai_panel_layout(panel);
     return panel;
 }
@@ -2010,6 +2861,8 @@ void ai_panel_destroy(AiPanel *panel)
 {
     if (!panel)
         return;
+    KillTimer(panel->wgs->term_hwnd, AI_SESSION_TIMER_ID);
+    RemovePropW(panel->wgs->term_hwnd, L"PuTTYAI.SessionWindow");
     if (panel->key) {
         wchar_t *key = control_text(panel->key);
         SecureZeroMemory(key, wcslen(key) * sizeof(wchar_t));
@@ -2026,6 +2879,13 @@ void ai_panel_destroy(AiPanel *panel)
     }
     if (panel->rich_edit_module)
         FreeLibrary(panel->rich_edit_module);
+    if (panel->title_font && panel->title_font != panel->ui_font)
+        DeleteObject(panel->title_font);
+    if (panel->ui_font &&
+        panel->ui_font != (HFONT)GetStockObject(DEFAULT_GUI_FONT))
+        DeleteObject(panel->ui_font);
+    if (panel->panel_brush)
+        DeleteObject(panel->panel_brush);
     sfree(panel);
 }
 
@@ -2046,60 +2906,162 @@ int ai_panel_width(const AiPanel *panel)
     return width;
 }
 
+static int control_text_width(HWND control, HFONT font)
+{
+    wchar_t text[128];
+    SIZE size = { 0, 0 };
+    HDC dc;
+    HFONT old_font;
+
+    if (!control || !GetWindowTextW(control, text, lenof(text)))
+        return 0;
+    dc = GetDC(control);
+    if (!dc)
+        return 0;
+    old_font = SelectObject(dc, font);
+    GetTextExtentPoint32W(dc, text, (int)wcslen(text), &size);
+    SelectObject(dc, old_font);
+    ReleaseDC(control, dc);
+    return size.cx;
+}
+
 void ai_panel_layout(AiPanel *panel)
 {
     RECT client;
     int width, left, x, y, inner, transcript_bottom;
+    int frame_button_width, frame_controls_left;
+    int context_width, settings_width, settings_x, title_width;
 
     if (!panel || !panel->background)
         return;
     GetClientRect(panel->wgs->term_hwnd, &client);
     width = ai_panel_width(panel);
     left = client.right - width;
-    x = left + 10;
-    inner = width - 20;
+    x = left + 12;
+    inner = width - 24;
     if (inner < 40)
         inner = 40;
-    y = 10;
+    y = AI_HOST_TABS_HEIGHT + 11;
+    frame_button_width = AI_FRAME_BUTTON_WIDTH;
+    settings_width = width >= 320 ? 89 : 56;
+    frame_controls_left = client.right - AI_OUTER_FRAME_WIDTH -
+        3 * frame_button_width;
+    settings_x = client.right - 12 - settings_width;
+    title_width = settings_x - x - 8;
+    if (title_width < 0)
+        title_width = 0;
 
 #define MOVE(control, cx, cy, cw, ch) do {                              \
         if (control) SetWindowPos(                                      \
             control, NULL, cx, cy, cw, ch,                              \
             SWP_NOZORDER | SWP_NOACTIVATE);                             \
     } while (0)
-    MOVE(panel->background, left, 0, width, client.bottom);
-    MOVE(panel->title, x, y + 3, inner - 112, 24);
-    MOVE(panel->settings, left + width - 112, y, 102, 27);
-    y += 31;
-    MOVE(panel->status, x, y, inner, 32);
-    y += 35;
+    MOVE(
+        panel->background, left, AI_HOST_TABS_HEIGHT,
+        width - AI_OUTER_FRAME_WIDTH,
+        client.bottom - AI_HOST_TABS_HEIGHT - AI_OUTER_FRAME_WIDTH);
+    MOVE(
+        panel->host_tabs, AI_OUTER_FRAME_WIDTH, AI_OUTER_FRAME_WIDTH,
+        client.right - 2 * AI_OUTER_FRAME_WIDTH,
+        AI_HOST_TABS_HEIGHT - AI_OUTER_FRAME_WIDTH);
+    MOVE(
+        panel->left_separator, left, AI_HOST_TABS_HEIGHT,
+        1, client.bottom - AI_HOST_TABS_HEIGHT - AI_OUTER_FRAME_WIDTH);
+    MOVE(panel->title, x, y + 1, title_width, 24);
+    MOVE(panel->settings, settings_x, y, settings_width, 27);
+    if (panel->minimize)
+        SetWindowPos(
+            panel->minimize, HWND_TOP, frame_controls_left,
+            AI_OUTER_FRAME_WIDTH,
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+    if (panel->maximize)
+        SetWindowPos(
+            panel->maximize, HWND_TOP,
+            frame_controls_left + frame_button_width, AI_OUTER_FRAME_WIDTH,
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+    if (panel->close)
+        SetWindowPos(
+            panel->close, HWND_TOP,
+            frame_controls_left + 2 * frame_button_width,
+            AI_OUTER_FRAME_WIDTH,
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+    y = AI_HOST_TABS_HEIGHT + 42;
+    MOVE(panel->status, x, y + 1, inner, 22);
+    y = AI_HOST_TABS_HEIGHT + 74;
 
     if (panel->settings_visible) {
-        MOVE(panel->endpoint_label, x, y, inner, 18); y += 18;
-        MOVE(panel->endpoint, x, y, inner, 23); y += 27;
-        MOVE(panel->model_label, x, y, 52, 18);
-        MOVE(panel->model, x + 55, y - 2, inner - 55, 23); y += 27;
-        MOVE(panel->key_label, x, y, 112, 18);
-        MOVE(panel->key, x + 115, y - 2, inner - 115, 23); y += 27;
-        MOVE(panel->limit_label, x, y, 120, 18);
-        MOVE(panel->limit, x + 123, y - 2, 74, 23);
-        MOVE(panel->save, x + inner - 105, y - 3, 105, 25); y += 27;
-        MOVE(panel->privacy, x, y, inner, 30); y += 34;
+        MOVE(panel->endpoint_label, x, y, inner, 20); y += 20;
+        MOVE(panel->endpoint, x, y, inner, 27); y += 32;
+        MOVE(panel->model_label, x, y + 3, 52, 22);
+        MOVE(panel->model, x + 55, y, inner - 55, 27); y += 32;
+        MOVE(panel->key_label, x, y + 3, 126, 22);
+        MOVE(panel->key, x + 129, y, inner - 129, 27); y += 32;
+        MOVE(panel->limit_label, x, y + 3, 126, 22);
+        MOVE(panel->limit, x + 129, y, 80, 27);
+        MOVE(panel->save, x + inner - 110, y, 110, 28); y += 33;
+        MOVE(panel->privacy, x, y, inner, 34); y += 39;
     }
 
-    transcript_bottom = client.bottom - 145;
+    MOVE(panel->top_separator, x, y, inner, 2);
+    y += 4;
+    transcript_bottom = client.bottom - 164;
     if (transcript_bottom < y + 50)
         transcript_bottom = y + 50;
     MOVE(panel->transcript, x, y, inner, transcript_bottom - y);
-    y = transcript_bottom + 7;
-    MOVE(panel->prompt, x, y, inner, 67);
-    y += 73;
-    MOVE(panel->include_context, x, y, inner, 20);
-    y += 23;
-    MOVE(panel->ask, x, y, 88, 28);
-    MOVE(panel->apply, x + 96, y, inner - 96, 28);
+    y = transcript_bottom + 5;
+    MOVE(panel->prompt_border, x, y, inner, 68);
+    MOVE(panel->prompt, x + 1, y + 1, inner - 2, 66);
+    y += 75;
+    context_width = control_text_width(
+        panel->include_context, panel->ui_font) + 54;
+    if (context_width > inner - 112)
+        context_width = inner - 112;
+    if (context_width < 54)
+        context_width = 54;
+    MOVE(panel->include_context, x, y, context_width, 32);
+    MOVE(panel->clear, x + inner - 104, y, 104, 32);
+    y += 39;
+    MOVE(panel->ask, x, y, inner, 35);
+
+    if (client.right > 0 && client.bottom > 0) {
+        SetWindowPos(
+            panel->outer_top, HWND_TOP, 0, 0, client.right,
+            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+        SetWindowPos(
+            panel->outer_bottom, HWND_TOP, 0,
+            client.bottom - AI_OUTER_FRAME_WIDTH, client.right,
+            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+        SetWindowPos(
+            panel->outer_left, HWND_TOP, 0, AI_OUTER_FRAME_WIDTH,
+            AI_OUTER_FRAME_WIDTH,
+            client.bottom - 2 * AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+        SetWindowPos(
+            panel->outer_right, HWND_TOP,
+            client.right - AI_OUTER_FRAME_WIDTH, AI_OUTER_FRAME_WIDTH,
+            AI_OUTER_FRAME_WIDTH,
+            client.bottom - 2 * AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+    }
 
 #undef MOVE
+}
+
+static void clear_current_conversation(AiPanel *panel)
+{
+    size_t i;
+    if (MessageBoxW(
+            panel->wgs->term_hwnd,
+            L"是否清空当前主机的 AI 对话记录？",
+            L"清空当前会话", MB_YESNO | MB_ICONQUESTION |
+            MB_DEFBUTTON2) != IDYES)
+        return;
+    for (i = 0; i < panel->history_count; i++)
+        sfree(panel->history[i].content);
+    panel->history_count = 0;
+    panel->transcript_scroll_locked = false;
+    SetWindowTextW(panel->transcript, L"");
+    set_candidate(panel, "");
+    reset_stream_markdown(panel);
+    SetWindowTextW(panel->status, L"当前会话已清空");
 }
 
 bool ai_panel_handle_command(
@@ -2116,16 +3078,48 @@ bool ai_panel_handle_command(
         if (notification == BN_CLICKED)
             apply_candidate(panel);
         return true;
+      case IDC_AI_CLEAR:
+        if (notification == BN_CLICKED)
+            clear_current_conversation(panel);
+        return true;
       case IDC_AI_SETTINGS:
         if (notification == BN_CLICKED)
             show_settings(panel, !panel->settings_visible);
+        return true;
+      case IDC_AI_MINIMIZE:
+        if (notification == BN_CLICKED)
+            ShowWindow(panel->wgs->term_hwnd, SW_MINIMIZE);
+        return true;
+      case IDC_AI_MAXIMIZE:
+        if (notification == BN_CLICKED) {
+            ShowWindow(
+                panel->wgs->term_hwnd,
+                IsZoomed(panel->wgs->term_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            InvalidateRect(panel->maximize, NULL, TRUE);
+        }
+        return true;
+      case IDC_AI_CLOSE:
+        if (notification == BN_CLICKED)
+            SendMessageW(panel->wgs->term_hwnd, WM_CLOSE, 0, 0);
         return true;
       case IDC_AI_SAVE:
         if (notification == BN_CLICKED)
             ai_save_settings(panel);
         return true;
-      case IDC_AI_PROMPT:
       case IDC_AI_CONTEXT:
+        if (notification == BN_CLICKED) {
+            LRESULT checked = SendMessageW(
+                panel->include_context, BM_GETCHECK, 0, 0);
+            SendMessageW(
+                panel->include_context, BM_SETCHECK,
+                checked == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED, 0);
+            SetWindowTextW(
+                panel->status,
+                checked == BST_CHECKED ? L"终端上下文已关闭" :
+                    L"下次提问将附带已脱敏的终端上下文");
+        }
+        return true;
+      case IDC_AI_PROMPT:
       case IDC_AI_ENDPOINT:
       case IDC_AI_MODEL:
       case IDC_AI_KEY:
@@ -2137,17 +3131,314 @@ bool ai_panel_handle_command(
     }
 }
 
+static void draw_action_button(AiPanel *panel, const DRAWITEMSTRUCT *draw)
+{
+    bool is_apply = draw->CtlID == IDC_AI_APPLY;
+    bool is_settings = draw->CtlID == IDC_AI_SETTINGS;
+    bool is_clear = draw->CtlID == IDC_AI_CLEAR;
+    bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+    COLORREF background = (is_settings || is_clear) ? RGB(255, 255, 255) :
+        (disabled ? RGB(205, 211, 218) :
+        (is_apply && panel->candidate_dangerous ? RGB(180, 83, 9) :
+                                                   RGB(30, 106, 221)));
+    COLORREF border_colour = is_settings ? RGB(211, 226, 243) :
+        (is_clear ? RGB(218, 222, 228) :
+        (disabled ? RGB(184, 190, 198) :
+        (is_apply && panel->candidate_dangerous ? RGB(146, 64, 14) :
+                                                  RGB(22, 86, 185))));
+    HBRUSH brush = CreateSolidBrush(background);
+    HPEN pen = CreatePen(PS_SOLID, 1, border_colour);
+    HBRUSH old_brush = SelectObject(draw->hDC, brush);
+    HPEN old_pen = SelectObject(draw->hDC, pen);
+    HFONT old_font = SelectObject(draw->hDC, panel->ui_font);
+    wchar_t text[64];
+    RECT text_rect = draw->rcItem;
+
+    Rectangle(
+        draw->hDC, draw->rcItem.left, draw->rcItem.top,
+        draw->rcItem.right, draw->rcItem.bottom);
+    GetWindowTextW(draw->hwndItem, text, lenof(text));
+    SetBkMode(draw->hDC, TRANSPARENT);
+    SetTextColor(
+        draw->hDC, is_settings ? RGB(32, 37, 43) :
+            (is_clear ? RGB(176, 48, 41) : RGB(255, 255, 255)));
+    DrawTextW(
+        draw->hDC, text, -1, &text_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (draw->itemState & ODS_FOCUS) {
+        RECT focus = draw->rcItem;
+        InflateRect(&focus, -3, -3);
+        DrawFocusRect(draw->hDC, &focus);
+    }
+    SelectObject(draw->hDC, old_font);
+    SelectObject(draw->hDC, old_pen);
+    SelectObject(draw->hDC, old_brush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+static void draw_frame_button(AiPanel *panel, const DRAWITEMSTRUCT *draw)
+{
+    bool hovered = panel->hovered_frame_button == draw->hwndItem;
+    bool pressed = (draw->itemState & ODS_SELECTED) != 0;
+    bool is_close = draw->CtlID == IDC_AI_CLOSE;
+    COLORREF background = RGB(0, 0, 0);
+    COLORREF foreground = RGB(220, 226, 233);
+    HBRUSH brush;
+    HPEN pen, old_pen;
+    HBRUSH old_brush;
+    int centre_x = (draw->rcItem.left + draw->rcItem.right) / 2;
+    int centre_y = (draw->rcItem.top + draw->rcItem.bottom) / 2;
+
+    if (is_close && (hovered || pressed)) {
+        background = pressed ? RGB(167, 38, 28) : RGB(196, 43, 28);
+        foreground = RGB(255, 255, 255);
+    } else if (pressed) {
+        background = RGB(48, 56, 66);
+    } else if (hovered) {
+        background = RGB(32, 38, 46);
+    }
+
+    brush = CreateSolidBrush(background);
+    FillRect(draw->hDC, &draw->rcItem, brush);
+    pen = CreatePen(PS_SOLID, 1, foreground);
+    old_pen = SelectObject(draw->hDC, pen);
+    old_brush = SelectObject(draw->hDC, GetStockObject(NULL_BRUSH));
+
+    if (draw->CtlID == IDC_AI_MINIMIZE) {
+        MoveToEx(draw->hDC, centre_x - 6, centre_y + 5, NULL);
+        LineTo(draw->hDC, centre_x + 7, centre_y + 5);
+    } else if (draw->CtlID == IDC_AI_MAXIMIZE) {
+        if (IsZoomed(panel->wgs->term_hwnd)) {
+            Rectangle(
+                draw->hDC, centre_x - 4, centre_y - 6,
+                centre_x + 7, centre_y + 4);
+            Rectangle(
+                draw->hDC, centre_x - 7, centre_y - 3,
+                centre_x + 4, centre_y + 7);
+        } else {
+            Rectangle(
+                draw->hDC, centre_x - 6, centre_y - 6,
+                centre_x + 7, centre_y + 7);
+        }
+    } else {
+        MoveToEx(draw->hDC, centre_x - 6, centre_y - 6, NULL);
+        LineTo(draw->hDC, centre_x + 7, centre_y + 7);
+        MoveToEx(draw->hDC, centre_x + 6, centre_y - 6, NULL);
+        LineTo(draw->hDC, centre_x - 7, centre_y + 7);
+    }
+
+    if (draw->itemState & ODS_FOCUS) {
+        RECT focus = draw->rcItem;
+        InflateRect(&focus, -4, -4);
+        DrawFocusRect(draw->hDC, &focus);
+    }
+    SelectObject(draw->hDC, old_brush);
+    SelectObject(draw->hDC, old_pen);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+static void draw_panel_separator(const DRAWITEMSTRUCT *draw)
+{
+    bool outer = draw->CtlID == IDC_AI_OUTER_TOP ||
+        draw->CtlID == IDC_AI_OUTER_BOTTOM ||
+        draw->CtlID == IDC_AI_OUTER_LEFT ||
+        draw->CtlID == IDC_AI_OUTER_RIGHT;
+    COLORREF colour = outer ? RGB(105, 126, 151) :
+        (draw->CtlID == IDC_AI_TOP_SEPARATOR ? RGB(153, 190, 235) :
+         (draw->CtlID == IDC_AI_LEFT_SEPARATOR ?
+              RGB(199, 217, 238) : RGB(221, 231, 242)));
+    HBRUSH brush = CreateSolidBrush(colour);
+    FillRect(draw->hDC, &draw->rcItem, brush);
+    DeleteObject(brush);
+}
+
+static void draw_context_switch(
+    AiPanel *panel, const DRAWITEMSTRUCT *draw)
+{
+    RECT text = draw->rcItem;
+    RECT track = draw->rcItem;
+    RECT knob;
+    bool checked = SendMessageW(
+        draw->hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    HBRUSH background = CreateSolidBrush(RGB(246, 248, 251));
+    HBRUSH track_brush = CreateSolidBrush(
+        checked ? RGB(30, 106, 221) : RGB(183, 190, 199));
+    HBRUSH knob_brush = CreateSolidBrush(RGB(255, 255, 255));
+    HBRUSH old_brush = SelectObject(draw->hDC, background);
+    HPEN old_pen = SelectObject(draw->hDC, GetStockObject(NULL_PEN));
+    HFONT old_font = SelectObject(draw->hDC, panel->ui_font);
+    wchar_t label[96];
+
+    FillRect(draw->hDC, &draw->rcItem, background);
+    GetWindowTextW(draw->hwndItem, label, lenof(label));
+    text.right = track.right - 52;
+    SetBkMode(draw->hDC, TRANSPARENT);
+    SetTextColor(draw->hDC, RGB(63, 69, 76));
+    DrawTextW(
+        draw->hDC, label, -1, &text,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+        DT_NOPREFIX);
+
+    track.left = track.right - 44;
+    track.right -= 2;
+    track.top += 7;
+    track.bottom -= 7;
+    SelectObject(draw->hDC, track_brush);
+    RoundRect(
+        draw->hDC, track.left, track.top, track.right, track.bottom,
+        18, 18);
+    knob.top = track.top + 2;
+    knob.bottom = track.bottom - 2;
+    if (checked) {
+        knob.right = track.right - 2;
+        knob.left = knob.right - (knob.bottom - knob.top);
+    } else {
+        knob.left = track.left + 2;
+        knob.right = knob.left + (knob.bottom - knob.top);
+    }
+    SelectObject(draw->hDC, knob_brush);
+    Ellipse(draw->hDC, knob.left, knob.top, knob.right, knob.bottom);
+
+    if (draw->itemState & ODS_FOCUS) {
+        RECT focus = draw->rcItem;
+        focus.right = text.right;
+        InflateRect(&focus, -2, -4);
+        DrawFocusRect(draw->hDC, &focus);
+    }
+
+    SelectObject(draw->hDC, old_font);
+    SelectObject(draw->hDC, old_pen);
+    SelectObject(draw->hDC, old_brush);
+    DeleteObject(knob_brush);
+    DeleteObject(track_brush);
+    DeleteObject(background);
+}
+
 bool ai_panel_handle_message(
     AiPanel *panel, UINT message, WPARAM wParam, LPARAM lParam,
     LRESULT *result)
 {
     if (!panel)
         return false;
+    if (message == WM_TIMER && wParam == AI_SESSION_TIMER_ID) {
+        refresh_host_sessions(panel);
+        if (result)
+            *result = 0;
+        return true;
+    }
+    if (message == WM_ACTIVATE) {
+        if (LOWORD(wParam) != WA_INACTIVE)
+            refresh_host_sessions(panel);
+        return false;
+    }
+    if (message == WM_NOTIFY) {
+        NMHDR *header = (NMHDR *)lParam;
+        if (header && header->hwndFrom == panel->transcript &&
+            header->code == EN_MSGFILTER) {
+            MSGFILTER *filter = (MSGFILTER *)lParam;
+            if (filter->msg == WM_MOUSEMOVE)
+                update_candidate_hover(panel, filter->lParam);
+            else if (filter->msg == WM_MOUSEWHEEL ||
+                     filter->msg == WM_VSCROLL)
+                ShowWindow(panel->apply, SW_HIDE);
+        }
+        return false;
+    }
+    if (message == WM_DRAWITEM) {
+        DRAWITEMSTRUCT *draw = (DRAWITEMSTRUCT *)lParam;
+        if (draw && (draw->CtlID == IDC_AI_ASK ||
+                     draw->CtlID == IDC_AI_APPLY ||
+                     draw->CtlID == IDC_AI_SETTINGS ||
+                     draw->CtlID == IDC_AI_CLEAR)) {
+            draw_action_button(panel, draw);
+            if (result)
+                *result = TRUE;
+            return true;
+        }
+        if (draw && (draw->CtlID == IDC_AI_MINIMIZE ||
+                     draw->CtlID == IDC_AI_MAXIMIZE ||
+                     draw->CtlID == IDC_AI_CLOSE)) {
+            draw_frame_button(panel, draw);
+            if (result)
+                *result = TRUE;
+            return true;
+        }
+        if (draw && draw->CtlID == IDC_AI_CONTEXT) {
+            draw_context_switch(panel, draw);
+            if (result)
+                *result = TRUE;
+            return true;
+        }
+        if (draw && (draw->CtlID == IDC_AI_TOP_SEPARATOR ||
+                      draw->CtlID == IDC_AI_LEFT_SEPARATOR ||
+                      draw->CtlID == IDC_AI_PROMPT_BORDER ||
+                      draw->CtlID == IDC_AI_OUTER_TOP ||
+                      draw->CtlID == IDC_AI_OUTER_BOTTOM ||
+                      draw->CtlID == IDC_AI_OUTER_LEFT ||
+                      draw->CtlID == IDC_AI_OUTER_RIGHT)) {
+            draw_panel_separator(draw);
+            if (result)
+                *result = TRUE;
+            return true;
+        }
+    }
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) {
+        HWND control = (HWND)lParam;
+        int id = control ? GetDlgCtrlID(control) : 0;
+        if (id >= IDC_AI_BACKGROUND && id <= IDC_AI_PRIVACY) {
+            HDC dc = (HDC)wParam;
+            SetBkMode(dc, TRANSPARENT);
+            SetBkColor(dc, RGB(246, 248, 251));
+            SetTextColor(
+                dc, id == IDC_AI_STATUS || id == IDC_AI_PRIVACY ?
+                    RGB(89, 98, 108) : RGB(31, 35, 40));
+            if (result)
+                *result = (LRESULT)panel->panel_brush;
+            return true;
+        }
+    }
     if (message == WM_PUTTY_AI_QUERY_DEFAULT_WIDTH) {
         if (result)
             *result = AI_PANEL_WIDTH;
         (void)wParam;
         (void)lParam;
+        return true;
+    }
+    if (message == WM_PUTTY_AI_QUERY_SESSION_COUNT) {
+        refresh_host_sessions(panel);
+        if (result)
+            *result = (LRESULT)panel->session_count;
+        return true;
+    }
+    if (message == WM_PUTTY_AI_QUERY_SESSION_WINDOW) {
+        size_t index = (size_t)wParam;
+        refresh_host_sessions(panel);
+        if (result)
+            *result = index < panel->session_count ?
+                (LRESULT)panel->session_windows[index] : 0;
+        return true;
+    }
+    if (message == WM_PUTTY_AI_QUERY_CANDIDATE_RANGE) {
+        if (result)
+            *result = wParam ? panel->candidate_end : panel->candidate_start;
+        return true;
+    }
+    if (message == WM_PUTTY_AI_QUERY_CANDIDATE_POINT) {
+        POINTL point = { 0, 0 };
+        if (panel->candidate_start >= 0) {
+            SendMessageW(
+                panel->transcript, EM_POSFROMCHAR,
+                (WPARAM)&point, panel->candidate_start);
+        }
+        if (result)
+            *result = MAKELPARAM((short)point.x, (short)point.y);
+        return true;
+    }
+    if (message == WM_PUTTY_AI_QUERY_LAST_ACTIVATED_SESSION) {
+        if (result)
+            *result = (LRESULT)panel->last_activated_session;
         return true;
     }
     if (message == WM_PUTTY_AI_QUERY_SELECTED_COLOUR ||
@@ -2178,6 +3469,9 @@ bool ai_panel_handle_message(
                 if ((cf.dwMask & CFM_FACE) &&
                     !_wcsicmp(cf.szFaceName, L"Consolas"))
                     style |= PUTTY_AI_STYLE_CODE;
+                if ((cf.dwMask & CFM_FACE) &&
+                    !_wcsicmp(cf.szFaceName, L"Microsoft YaHei UI"))
+                    style |= PUTTY_AI_STYLE_ROLE_HEADER;
                 if (cf.dwMask & CFM_SIZE)
                     style |= ((DWORD)cf.yHeight <<
                               PUTTY_AI_STYLE_HEIGHT_SHIFT);
@@ -2191,7 +3485,7 @@ bool ai_panel_handle_message(
     if (message == WM_PUTTY_AI_QUERY_LAST_RESPONSE_COLOUR) {
         CHARFORMAT2W cf;
         CHARRANGE saved;
-        LONG end = GetWindowTextLengthW(panel->transcript);
+        LONG end = rich_text_length(panel->transcript);
         memset(&cf, 0, sizeof(cf));
         cf.cbSize = sizeof(cf);
         SendMessageW(
@@ -2220,8 +3514,7 @@ bool ai_panel_handle_message(
                 SetWindowTextW(panel->status, L"正在接收回复...");
                 stream_markdown_append(panel, chunk->text);
                 if (!panel->last_stream_render ||
-                    now - panel->last_stream_render >= 40 ||
-                    strchr(chunk->text, '\n')) {
+                    now - panel->last_stream_render >= 100) {
                     render_stream_markdown(panel, panel->stream_markdown);
                     panel->last_stream_render = now;
                 }
@@ -2251,7 +3544,7 @@ bool ai_panel_handle_message(
                 history_add_turn(panel, response->question, response->text);
                 set_candidate(panel, response->text);
             } else {
-                LONG end = GetWindowTextLengthW(panel->transcript);
+                LONG end = rich_text_length(panel->transcript);
                 SetWindowTextW(panel->status, L"模型请求失败");
                 audit_event(panel, "request-failure", "");
                 rich_begin_update(panel);

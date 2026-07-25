@@ -9,12 +9,12 @@ An AI-enhanced SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~s
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
 ![Language](https://img.shields.io/badge/language-C-A8B9CC?style=flat-square)
-![Version](https://img.shields.io/badge/version-v1.0.0-success?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.0.1-success?style=flat-square)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.0` has completed the current development, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
+> `v1.0.1` has completed the current development, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
 
 This is an independently maintained project. It is not affiliated with, authorized by, sponsored by, or endorsed by PuTTY, OpenAI, any model provider, or any bastion-client vendor. Third-party names are used only to describe compatibility and license attribution; all related rights belong to their respective owners.
 
@@ -32,6 +32,8 @@ PuTTY AI adds an AI assistant that can understand the current terminal session w
 - **Command generation and explanation**: Generate candidate commands and explain their purpose, parameters, and potential impact.
 - **Fill after confirmation**: Show a command first, ask for confirmation, and then send it to the SSH terminal to reduce accidental operations.
 - **Compatible custom models**: Supports OpenAI Chat Completions-compatible endpoints, streaming responses, and persistent settings.
+- **Stable streaming reading**: Scrolling upward locks the current reading position so incremental Markdown rendering cannot pull the scrollbar back to the end.
+- **Multi-host workspace**: The top host tabs switch between running PuTTY processes, while each host keeps an isolated AI conversation.
 
 ## Target Interaction Flow
 
@@ -103,14 +105,15 @@ After establishing an SSH session, the PuTTY AI panel appears on the right:
 
 1. Click **设置** and enter an OpenAI Chat Completions-compatible endpoint, model name, and API key.
 2. After clicking **永久保存**, the endpoint, model, API key, and context length are persisted for the current Windows user and restored as editable values in the next session. The API key is protected with Windows DPAPI and is not stored as plaintext in the registry.
-3. Terminal context is disabled by default. Select **附带已脱敏的终端上下文** only when it is needed. The default maximum is 12,000 characters; the configurable range is 1,000 to 64,000.
-4. Model requests use streaming responses, so the first content chunk appears immediately. Markdown is formatted once the response completes.
+3. Terminal context is disabled by default. Enable the **附带已脱敏的终端上下文** switch below the prompt only when it is needed. The default maximum is 12,000 characters; the configurable range is 1,000 to 64,000.
+4. Model requests use streaming responses, so the first content chunk appears immediately. Markdown is formatted during streaming and finalized when the response completes. Scrolling upward preserves the current reading position; reaching the bottom resumes automatic following.
 5. Before terminal context is sent, the client makes a best-effort attempt to redact passwords, tokens, authorization headers, and private keys.
-6. The current window supports multi-turn conversations. Later questions include previous successful questions and answers. The system asks the model to reply in Simplified Chinese by default, but permits analysis and plain-text conclusions without requiring a command in every answer.
-7. Markdown headings, lists, and code blocks in replies are rendered in the conversation area. When a command is detected, click **填入命令**; the program only fills the command into the terminal and does not press Enter automatically.
+6. Each host supports a multi-turn conversation. Later questions always include previous successful questions and answers, without exposing a user-facing history-save option. The system asks the model to reply in Simplified Chinese by default, but permits analysis and plain-text conclusions without requiring a command in every answer. Conversation history is isolated by host.
+7. Markdown headings, lists, and code blocks in replies are rendered in the conversation area. Hover over a detected command block to reveal **填入终端**; the program only fills the command into the terminal and does not press Enter automatically.
 8. Clicking the terminal after using the right-side chat restores keyboard interaction. High-risk commands such as deleting files, formatting disks, stopping services, or changing permissions require two confirmations.
+9. The black host bar at the top lists running PuTTY sessions. Selecting a host switches the terminal process and its associated AI panel together. **清空对话** is a standalone action and requests confirmation before clearing the current host's history.
 
-The panel uses a 480-pixel normal width and shrinks responsively in narrow windows while retaining an interactive terminal area.
+The window follows the supplied UI design with a client-drawn one-pixel outline, full-width 44/46-pixel session and host-information bars, a cool-gray 440-pixel AI panel with a white conversation surface, layered prompt actions, and global minimize, maximize/restore, and close controls in the black upper bar. DWM non-client rendering is disabled so the outline remains continuous around the terminal and AI panel without stale frame fragments. The first window is centred in the current monitor's working area, and the context switch is grouped tightly with its label. The panel shrinks responsively in narrow windows while retaining an interactive terminal area. User and AI role headings use the same Microsoft YaHei UI font, size, and weight for consistent Chinese and Latin typography.
 
 You can also provide session defaults through environment variables:
 
@@ -150,7 +153,7 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 Remote verification connects to `ssh.github.com:443` by default, disables Pageant and connection sharing, and verifies only host-key negotiation and the server entering the `publickey` authentication stage. Without credentials, `No supported authentication methods available (server sent: publickey)` is an expected result: it means the SSH connection and handshake successfully reached authentication.
 
-The packaged artifact is `package/PuTTY-AI-v1.0.0-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
+The packaged artifact is `package/PuTTY-AI-v1.0.1-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
 
 ## Development Plan
 
@@ -165,6 +168,14 @@ The packaged artifact is `package/PuTTY-AI-v1.0.0-windows-x64.zip`. It contains 
 - [x] Persist Chat Completions settings and DPAPI-protected API keys across sessions
 - [x] Support Markdown, code blocks, and command display
 - [x] Support command confirmation and one-click filling
+- [x] Move command filling into a hover action on response code blocks
+- [x] Match the custom-outlined two-level host-bar UI and 440-pixel AI panel
+- [x] Enclose the terminal and AI panel in one continuous four-sided frame
+- [x] Use uniform typography for user and AI role headings
+- [x] Use a visible context switch, automatic per-host history, and a standalone clear action
+- [x] Provide global minimize, maximize/restore, and close controls for the borderless window
+- [x] Switch among multiple PuTTY host processes with per-host AI isolation
+- [x] Preserve the user's scroll position during incremental Markdown rendering
 - [x] Add dangerous-command detection and double confirmation
 - [x] Add sensitive-information redaction and privacy controls
 - [x] Add metadata-only operation auditing

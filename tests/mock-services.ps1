@@ -112,7 +112,20 @@ public static class PuttyAiMockServices
                             "> quote\\n\\n" +
                             "1. item with *italic*, ~~removed~~, `inline`, " +
                             "[docs](https://example.com)\\n\\n" +
-                            "| col | value |\\n| --- | --- |\\n| A | B |\\n\\n",
+                            "| col | value |\\n| --- | --- |\\n| A | B |\\n\\n" +
+                            "scroll regression line 01\\n" +
+                            "scroll regression line 02\\n" +
+                            "scroll regression line 03\\n" +
+                            "scroll regression line 04\\n" +
+                            "scroll regression line 05\\n" +
+                            "scroll regression line 06\\n" +
+                            "scroll regression line 07\\n" +
+                            "scroll regression line 08\\n" +
+                            "scroll regression line 09\\n" +
+                            "scroll regression line 10\\n" +
+                            "scroll regression line 11\\n" +
+                            "scroll regression line 12\\n" +
+                            "stream-scroll-anchor\\n",
                             "```bash\\n" + command + "\\n```"
                         };
                     }
@@ -158,7 +171,7 @@ public static class PuttyAiMockServices
         listener.Start();
         try
         {
-            Task[] sessions = new Task[5];
+            Task[] sessions = new Task[8];
             for (int index = 0; index < sessions.Length; index++)
             {
                 TcpClient client = listener.AcceptTcpClient();

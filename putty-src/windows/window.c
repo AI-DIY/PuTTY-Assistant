@@ -135,6 +135,13 @@ DECL_WINDOWS_FUNCTION(static, HMONITOR, MonitorFromWindow, (HWND, DWORD));
 DECL_WINDOWS_FUNCTION(static, HRESULT, GetDpiForMonitor, (HMONITOR hmonitor, enum MONITOR_DPI_TYPE dpiType, UINT *dpiX, UINT *dpiY));
 DECL_WINDOWS_FUNCTION(static, HRESULT, GetSystemMetricsForDpi, (int nIndex, UINT dpi));
 DECL_WINDOWS_FUNCTION(static, HRESULT, AdjustWindowRectExForDpi, (LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi));
+DECL_WINDOWS_FUNCTION(static, HRESULT, DwmSetWindowAttribute,
+                      (HWND hwnd, DWORD attribute, LPCVOID value, DWORD size));
+
+#define PUTTY_DWMWA_NCRENDERING_POLICY 2
+#define PUTTY_DWMNCRP_DISABLED 1
+#define PUTTY_DWMWA_WINDOW_CORNER_PREFERENCE 33
+#define PUTTY_DWMWCP_DONOTROUND 1
 
 static UINT wm_mousewheel = WM_MOUSEWHEEL;
 
@@ -530,7 +537,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     wgs->font_width = 10;
     wgs->font_height = 20;
     wgs->extra_width = 25 + ai_panel_default_width();
-    wgs->extra_height = 28;
+    wgs->extra_height = 28 + ai_panel_terminal_top();
     guess_width = wgs->extra_width + wgs->font_width * conf_get_int(
         wgs->conf, CONF_width);
     guess_height = wgs->extra_height + wgs->font_height * conf_get_int(
@@ -545,7 +552,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
 
     {
-        int winmode = WS_OVERLAPPEDWINDOW | WS_VSCROLL;
+        int winmode = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
+            WS_MAXIMIZEBOX | WS_SYSMENU;
         int exwinmode = 0;
         const struct BackendVtable *vt =
             backend_vt_from_proto(be_default_protocol);
@@ -555,8 +563,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         wchar_t *uappname = dup_mb_to_wc(DEFAULT_CODEPAGE, appname);
         wgs->window_name = dup_mb_to_wc(DEFAULT_CODEPAGE, appname);
         wgs->icon_name = dup_mb_to_wc(DEFAULT_CODEPAGE, appname);
-        if (!conf_get_bool(wgs->conf, CONF_scrollbar))
-            winmode &= ~(WS_VSCROLL);
         if (conf_get_int(wgs->conf, CONF_resize_action) == RESIZE_DISABLED ||
             resize_forbidden)
             winmode &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
@@ -607,6 +613,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     SetWindowLongPtr(wgs->term_hwnd, GWLP_USERDATA, (LONG_PTR)wgs);
 
+    if (p_DwmSetWindowAttribute) {
+        DWORD nonclient_policy = PUTTY_DWMNCRP_DISABLED;
+        DWORD corner_preference = PUTTY_DWMWCP_DONOTROUND;
+        p_DwmSetWindowAttribute(
+            wgs->term_hwnd, PUTTY_DWMWA_NCRENDERING_POLICY,
+            &nonclient_policy, sizeof(nonclient_policy));
+        p_DwmSetWindowAttribute(
+            wgs->term_hwnd, PUTTY_DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_preference, sizeof(corner_preference));
+    }
+
     /*
      * Initialise the fonts, simultaneously correcting the guesses
      * for font_{width,height}.
@@ -643,13 +660,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         RECT cr, wr;
         GetWindowRect(wgs->term_hwnd, &wr);
         GetClientRect(wgs->term_hwnd, &cr);
-        wgs->offset_width = wgs->offset_height =
-            conf_get_int(wgs->conf, CONF_window_border);
+        wgs->offset_width = conf_get_int(wgs->conf, CONF_window_border);
+        wgs->offset_height =
+            conf_get_int(wgs->conf, CONF_window_border) +
+            ai_panel_terminal_top();
         wgs->extra_width =
             wr.right - wr.left - cr.right + cr.left + wgs->offset_width*2 +
             ai_panel_width(wgs->ai_panel);
         wgs->extra_height =
-            wr.bottom - wr.top - cr.bottom + cr.top +wgs->offset_height*2;
+            wr.bottom - wr.top - cr.bottom + cr.top +
+            conf_get_int(wgs->conf, CONF_window_border) * 2 +
+            ai_panel_terminal_top();
     }
 
     /*
@@ -663,7 +684,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      * off the edge of a monitor.
      */
     {
-        /* Find the previous coordinates of the window */
+        /* Centre the first terminal window in its monitor's working area. */
         RECT winr;
         GetWindowRect(wgs->term_hwnd, &winr);
 
@@ -673,17 +694,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         /* Adjust them if necessary */
         RECT war;
         if (get_workingarea_rect(wgs, &war)) {
-            /*
-             * Try to ensure the window is entirely within the monitor's
-             * working area, by adjusting its position if not.
-             *
-             * We first move it left, if it overlaps off the right side. Then
-             * we move it right if it overlaps off the left side. This means
-             * that if it's wider than the working area (so that some overlap
-             * is unavoidable), we prefer to get its left edge in bounds than
-             * its right edge. Similarly, we do the y checks in the same
-             * order, privileging the top edge over the bottom.
-             */
+            x = war.left + ((war.right - war.left) - guess_width) / 2;
+            y = war.top + ((war.bottom - war.top) - guess_height) / 2;
             if (x + guess_width > war.right)
                 x = war.right - guess_width;
             if (x < war.left)
@@ -1786,13 +1798,14 @@ static void recompute_window_offset(WinGuiSeat *wgs)
     GetClientRect(wgs->term_hwnd, &cr);
 
     int win_width  = cr.right - cr.left - ai_panel_width(wgs->ai_panel);
-    int win_height = cr.bottom - cr.top;
+    int win_height = cr.bottom - cr.top - ai_panel_terminal_top();
 
     if (win_width < 1)
         win_width = 1;
 
     int new_offset_width = (win_width-wgs->font_width*wgs->term->cols)/2;
-    int new_offset_height = (win_height-wgs->font_height*wgs->term->rows)/2;
+    int new_offset_height = ai_panel_terminal_top() +
+        (win_height-wgs->font_height*wgs->term->rows)/2;
 
     if (wgs->offset_width != new_offset_width ||
         wgs->offset_height != new_offset_height) {
@@ -1819,7 +1832,7 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
     GetClientRect(wgs->term_hwnd, &cr);
 
     win_width  = cr.right - cr.left - ai_panel_width(wgs->ai_panel);
-    win_height = cr.bottom - cr.top;
+    win_height = cr.bottom - cr.top - ai_panel_terminal_top();
 
     resize_action = conf_get_int(wgs->conf, CONF_resize_action);
     window_border = conf_get_int(wgs->conf, CONF_window_border);
@@ -1852,7 +1865,9 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
         wgs->extra_width =
             wr.right - wr.left - cr.right + cr.left +
             ai_panel_width(wgs->ai_panel);
-        wgs->extra_height = wr.bottom - wr.top - cr.bottom + cr.top;
+        wgs->extra_height =
+            wr.bottom - wr.top - cr.bottom + cr.top +
+            ai_panel_terminal_top();
 
         if (resize_action != RESIZE_TERM) {
             if (wgs->font_width != win_width/wgs->term->cols ||
@@ -1867,7 +1882,7 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
                 init_fonts(wgs, fw, fh);
                 wgs->offset_width =
                     (win_width - wgs->font_width*wgs->term->cols) / 2;
-                wgs->offset_height =
+                wgs->offset_height = ai_panel_terminal_top() +
                     (win_height - wgs->font_height*wgs->term->rows) / 2;
                 InvalidateRect(wgs->term_hwnd, NULL, true);
             }
@@ -1883,8 +1898,9 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
                           conf_get_int(wgs->conf, CONF_savelines));
                 wgs->offset_width =
                     (win_width - window_border - wgs->font_width*wgs->term->cols) / 2;
-                wgs->offset_height =
-                    (win_height - window_border - wgs->font_height*wgs->term->rows) / 2;
+                wgs->offset_height = ai_panel_terminal_top() +
+                    (win_height - window_border -
+                     wgs->font_height*wgs->term->rows) / 2;
                 InvalidateRect(wgs->term_hwnd, NULL, true);
             }
         }
@@ -1900,7 +1916,8 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
         if (conf_get_bool(wgs->conf, CONF_scrollbar))
             rect.right += p_GetSystemMetricsForDpi(SM_CXVSCROLL,
                                                    wgs->dpi_info.cur_dpi.x);
-        rect.bottom = (wgs->font_height * wgs->term->rows);
+        rect.bottom = (wgs->font_height * wgs->term->rows) +
+            ai_panel_terminal_top();
         p_AdjustWindowRectExForDpi(
             &rect, GetWindowLongPtr(wgs->term_hwnd, GWL_STYLE),
             FALSE, GetWindowLongPtr(wgs->term_hwnd, GWL_EXSTYLE),
@@ -1928,12 +1945,14 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
      * so we resize to the default font size.
      */
     if (reinit>0) {
-        wgs->offset_width = wgs->offset_height = window_border;
+        wgs->offset_width = window_border;
+        wgs->offset_height = window_border + ai_panel_terminal_top();
         wgs->extra_width =
             wr.right - wr.left - cr.right + cr.left + wgs->offset_width*2 +
             ai_panel_width(wgs->ai_panel);
         wgs->extra_height =
-            wr.bottom - wr.top - cr.bottom + cr.top + wgs->offset_height*2;
+            wr.bottom - wr.top - cr.bottom + cr.top + window_border*2 +
+            ai_panel_terminal_top();
 
         if (win_width != (wgs->font_width*wgs->term->cols +
                           wgs->offset_width*2) ||
@@ -1961,12 +1980,14 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
     if ((resize_action == RESIZE_TERM && reinit<=0) ||
         (resize_action == RESIZE_EITHER && reinit<0) ||
         reinit>0) {
-        wgs->offset_width = wgs->offset_height = window_border;
+        wgs->offset_width = window_border;
+        wgs->offset_height = window_border + ai_panel_terminal_top();
         wgs->extra_width =
             wr.right - wr.left - cr.right + cr.left + wgs->offset_width*2 +
             ai_panel_width(wgs->ai_panel);
         wgs->extra_height =
-            wr.bottom - wr.top - cr.bottom + cr.top + wgs->offset_height*2;
+            wr.bottom - wr.top - cr.bottom + cr.top + window_border*2 +
+            ai_panel_terminal_top();
 
         if (win_width != (wgs->font_width*wgs->term->cols +
                           wgs->offset_width*2) ||
@@ -2028,13 +2049,16 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
         init_fonts(wgs, (win_width-window_border*2)/wgs->term->cols,
                    (win_height-window_border*2)/wgs->term->rows);
         wgs->offset_width = (win_width-wgs->font_width*wgs->term->cols)/2;
-        wgs->offset_height = (win_height-wgs->font_height*wgs->term->rows)/2;
+        wgs->offset_height = ai_panel_terminal_top() +
+            (win_height-wgs->font_height*wgs->term->rows)/2;
 
         wgs->extra_width =
             wr.right - wr.left - cr.right + cr.left + wgs->offset_width*2 +
             ai_panel_width(wgs->ai_panel);
         wgs->extra_height =
-            wr.bottom - wr.top - cr.bottom + cr.top + wgs->offset_height*2;
+            wr.bottom - wr.top - cr.bottom + cr.top +
+            (wgs->offset_height - ai_panel_terminal_top()) * 2 +
+            ai_panel_terminal_top();
 
         InvalidateRect(wgs->term_hwnd, NULL, true);
     }
@@ -2197,7 +2221,7 @@ static void free_hdc(WinGuiSeat *wgs, HDC hdc)
 static void wm_size_resize_term(WinGuiSeat *wgs, LPARAM lParam)
 {
     int width = LOWORD(lParam) - ai_panel_width(wgs->ai_panel);
-    int height = HIWORD(lParam);
+    int height = HIWORD(lParam) - ai_panel_terminal_top();
     int border_size = conf_get_int(wgs->conf, CONF_window_border);
 
     if (width < 1)
@@ -2236,7 +2260,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
     WinGuiSeat *wgs = (WinGuiSeat *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     LRESULT ai_result;
 
-    if (wgs && ai_panel_handle_message(
+    if (message == WM_NCCALCSIZE && wParam)
+        return 0;
+
+    if (message == WM_GETMINMAXINFO) {
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO info;
+        MINMAXINFO *limits = (MINMAXINFO *)lParam;
+        memset(&info, 0, sizeof(info));
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfo(monitor, &info)) {
+            limits->ptMaxPosition.x = info.rcWork.left - info.rcMonitor.left;
+            limits->ptMaxPosition.y = info.rcWork.top - info.rcMonitor.top;
+            limits->ptMaxSize.x = info.rcWork.right - info.rcWork.left;
+            limits->ptMaxSize.y = info.rcWork.bottom - info.rcWork.top;
+            return 0;
+        }
+    }
+
+    if (!wgs)
+        return sw_DefWindowProc(hwnd, message, wParam, lParam);
+
+    if (ai_panel_handle_message(
                    wgs->ai_panel, message, wParam, lParam, &ai_result))
         return ai_result;
 
@@ -2268,6 +2313,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
         show_mouseptr(wgs, true);
         PostQuitMessage(0);
         return 0;
+      case WM_NCHITTEST: {
+        RECT window;
+        POINT point = {
+            (int)(short)LOWORD(lParam), (int)(short)HIWORD(lParam)
+        };
+        const int edge = 6;
+        bool left, right, top, bottom;
+
+        if (IsZoomed(hwnd) ||
+            conf_get_int(wgs->conf, CONF_resize_action) == RESIZE_DISABLED)
+            break;
+        GetWindowRect(hwnd, &window);
+        left = point.x < window.left + edge;
+        right = point.x >= window.right - edge;
+        top = point.y < window.top + edge;
+        bottom = point.y >= window.bottom - edge;
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+        break;
+      }
       case WM_INITMENUPOPUP:
         if ((HMENU)wParam == wgs->savedsess_menu) {
             /* About to pop up Saved Sessions sub-menu.
@@ -3030,7 +3101,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
             int ex_width = wgs->extra_width +
                 (window_border - wgs->offset_width) * 2;
             int ex_height = wgs->extra_height +
-                (window_border - wgs->offset_height) * 2;
+                (window_border + ai_panel_terminal_top() -
+                 wgs->offset_height) * 2;
             LPRECT r = (LPRECT) lParam;
 
             width = r->right - r->left - ex_width;
@@ -4182,6 +4254,7 @@ static void init_winfuncs(void)
     HMODULE user32_module = load_system32_dll("user32.dll");
     HMODULE winmm_module = load_system32_dll("winmm.dll");
     HMODULE shcore_module = load_system32_dll("shcore.dll");
+    HMODULE dwmapi_module = load_system32_dll("dwmapi.dll");
     GET_WINDOWS_FUNCTION(user32_module, FlashWindowEx);
     GET_WINDOWS_FUNCTION(user32_module, ToUnicodeEx);
     GET_WINDOWS_FUNCTION(winmm_module, PlaySoundW);
@@ -4192,6 +4265,7 @@ static void init_winfuncs(void)
     GET_WINDOWS_FUNCTION_NO_TYPECHECK(shcore_module, GetDpiForMonitor);
     GET_WINDOWS_FUNCTION_NO_TYPECHECK(user32_module, GetSystemMetricsForDpi);
     GET_WINDOWS_FUNCTION_NO_TYPECHECK(user32_module, AdjustWindowRectExForDpi);
+    GET_WINDOWS_FUNCTION_NO_TYPECHECK(dwmapi_module, DwmSetWindowAttribute);
 }
 
 /*
@@ -5791,11 +5865,7 @@ static void wintw_set_maximised(TermWin *tw, bool maximised)
  */
 static bool is_full_screen(WinGuiSeat *wgs)
 {
-    if (!IsZoomed(wgs->term_hwnd))
-        return false;
-    if (GetWindowLongPtr(wgs->term_hwnd, GWL_STYLE) & WS_CAPTION)
-        return false;
-    return true;
+    return wgs->ai_custom_fullscreen;
 }
 
 /* Get a MONITORINFO structure for the nearest available monitor, if the
@@ -5878,6 +5948,7 @@ static void make_full_screen(WinGuiSeat *wgs)
     else
         style &= ~WS_VSCROLL;
     SetWindowLongPtr(wgs->term_hwnd, GWL_STYLE, style);
+    wgs->ai_custom_fullscreen = true;
 
     /* Resize ourselves to exactly cover the nearest monitor. */
     get_fullscreen_rect(wgs, &ss);
@@ -5904,17 +5975,17 @@ static void clear_full_screen(WinGuiSeat *wgs)
 {
     DWORD oldstyle, style;
 
+    if (!wgs->ai_custom_fullscreen)
+        return;
+
     /* Reinstate the window furniture. */
     style = oldstyle = GetWindowLongPtr(wgs->term_hwnd, GWL_STYLE);
-    style |= WS_CAPTION | WS_BORDER;
+    style &= ~(WS_CAPTION | WS_BORDER | WS_VSCROLL);
     if (conf_get_int(wgs->conf, CONF_resize_action) == RESIZE_DISABLED)
         style &= ~WS_THICKFRAME;
     else
         style |= WS_THICKFRAME;
-    if (conf_get_bool(wgs->conf, CONF_scrollbar))
-        style |= WS_VSCROLL;
-    else
-        style &= ~WS_VSCROLL;
+    wgs->ai_custom_fullscreen = false;
     if (style != oldstyle) {
         SetWindowLongPtr(wgs->term_hwnd, GWL_STYLE, style);
         SetWindowPos(wgs->term_hwnd, NULL, 0, 0, 0, 0,

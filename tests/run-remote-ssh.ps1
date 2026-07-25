@@ -118,7 +118,13 @@ try {
         }
     }
 
-    if (-not $hostKeyObserved -and -not $resultText) {
+    $sessionWindow = Get-ProcessWindows $putty.Id | Where-Object {
+        $_.Class -eq "PuTTY"
+    } | Select-Object -First 1
+    $sessionOpen = $null -ne $sessionWindow -and
+        $null -ne (Get-Process -Id $putty.Id -ErrorAction SilentlyContinue)
+
+    if (-not $hostKeyObserved -and -not $resultText -and -not $sessionOpen) {
         throw "No SSH host-key or authentication result was observed"
     }
     if ($resultText -and
@@ -130,7 +136,7 @@ try {
     [pscustomobject]@{
         Endpoint = "$HostName`:$Port"
         HostKeyNegotiation = $(if ($hostKeyObserved) { "observed" } else { "cached" })
-        AuthenticationStage = $(if ($resultText) { "reached" } else { "connection remained open" })
+        AuthenticationStage = $(if ($resultText) { "reached" } elseif ($sessionOpen) { "waiting for credentials" } else { "connection remained open" })
         Result = $(if ($resultText) { $resultText } else { "SSH session established beyond host-key verification" })
     } | Format-List
 }

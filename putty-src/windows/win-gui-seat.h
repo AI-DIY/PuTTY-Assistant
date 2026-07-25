@@ -142,6 +142,7 @@ struct WinGuiSeat {
 
     bool ignore_clip;
     bool fullscr_on_max;
+    bool ai_custom_fullscreen;
     bool processed_resize;
     bool in_scrollbar_loop;
     UINT last_mousemove;
