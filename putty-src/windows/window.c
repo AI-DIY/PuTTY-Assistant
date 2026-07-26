@@ -142,6 +142,8 @@ DECL_WINDOWS_FUNCTION(static, HRESULT, DwmSetWindowAttribute,
 #define PUTTY_DWMNCRP_DISABLED 1
 #define PUTTY_DWMWA_WINDOW_CORNER_PREFERENCE 33
 #define PUTTY_DWMWCP_DONOTROUND 1
+#define PUTTY_DWMWA_BORDER_COLOR 34
+#define PUTTY_DWMWA_COLOR_NONE 0xFFFFFFFE
 
 static UINT wm_mousewheel = WM_MOUSEWHEEL;
 
@@ -553,7 +555,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     {
         int winmode = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
-            WS_MAXIMIZEBOX | WS_SYSMENU;
+            WS_MAXIMIZEBOX | WS_SYSMENU | WS_CLIPCHILDREN;
         int exwinmode = 0;
         const struct BackendVtable *vt =
             backend_vt_from_proto(be_default_protocol);
@@ -616,12 +618,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (p_DwmSetWindowAttribute) {
         DWORD nonclient_policy = PUTTY_DWMNCRP_DISABLED;
         DWORD corner_preference = PUTTY_DWMWCP_DONOTROUND;
+        DWORD border_colour = PUTTY_DWMWA_COLOR_NONE;
         p_DwmSetWindowAttribute(
             wgs->term_hwnd, PUTTY_DWMWA_NCRENDERING_POLICY,
             &nonclient_policy, sizeof(nonclient_policy));
         p_DwmSetWindowAttribute(
             wgs->term_hwnd, PUTTY_DWMWA_WINDOW_CORNER_PREFERENCE,
             &corner_preference, sizeof(corner_preference));
+        p_DwmSetWindowAttribute(
+            wgs->term_hwnd, PUTTY_DWMWA_BORDER_COLOR,
+            &border_colour, sizeof(border_colour));
     }
 
     /*
@@ -2260,8 +2266,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
     WinGuiSeat *wgs = (WinGuiSeat *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     LRESULT ai_result;
 
-    if (message == WM_NCCALCSIZE && wParam)
+    /* Resize hit testing still uses WS_THICKFRAME, but all frame pixels are
+     * owned by the client-drawn controls. */
+    if (message == WM_NCCALCSIZE)
         return 0;
+    if (message == WM_NCPAINT)
+        return 0;
+    if (message == WM_NCACTIVATE)
+        return TRUE;
 
     if (message == WM_GETMINMAXINFO) {
         HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -6043,6 +6055,12 @@ static SeatPromptResult win_seat_get_userpass_input(Seat *seat, prompts_t *p)
     spr = cmdline_get_passwd_input(p, &wgs->cmdline_get_passwd_state, true);
     if (spr.kind == SPRK_INCOMPLETE)
         spr = term_get_userpass_input(wgs->term, p);
+    if (spr.kind == SPRK_OK && p->to_server && !p->from_server &&
+        p->n_prompts == 1 && p->name &&
+        !strcmp(p->name, "SSH login name") && p->prompts[0]->echo) {
+        ai_panel_set_current_user(
+            wgs->ai_panel, prompt_get_result_ref(p->prompts[0]));
+    }
     return spr;
 }
 

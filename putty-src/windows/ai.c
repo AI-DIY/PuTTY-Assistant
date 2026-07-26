@@ -290,6 +290,18 @@ typedef struct SessionEnumContext {
     size_t count;
 } SessionEnumContext;
 
+typedef enum AiFrameAction {
+    AI_FRAME_MINIMIZE,
+    AI_FRAME_TOGGLE_MAXIMIZE,
+    AI_FRAME_CLOSE,
+} AiFrameAction;
+
+typedef struct SessionActionContext {
+    AiFrameAction action;
+    bool any_window;
+    bool all_maximized;
+} SessionActionContext;
+
 struct AiRequest {
     HWND target;
     wchar_t *endpoint;
@@ -368,6 +380,55 @@ static BOOL CALLBACK enum_session_window(HWND hwnd, LPARAM lParam)
     return TRUE;
 }
 
+static BOOL CALLBACK enum_session_window_state(HWND hwnd, LPARAM lParam)
+{
+    SessionActionContext *context = (SessionActionContext *)lParam;
+
+    if (!GetPropW(hwnd, L"PuTTYAI.SessionWindow") || !IsWindow(hwnd))
+        return TRUE;
+
+    context->any_window = true;
+    if (!IsZoomed(hwnd))
+        context->all_maximized = false;
+    return TRUE;
+}
+
+static BOOL CALLBACK apply_session_window_action(HWND hwnd, LPARAM lParam)
+{
+    SessionActionContext *context = (SessionActionContext *)lParam;
+
+    if (!GetPropW(hwnd, L"PuTTYAI.SessionWindow") || !IsWindow(hwnd))
+        return TRUE;
+
+    switch (context->action) {
+      case AI_FRAME_MINIMIZE:
+        ShowWindowAsync(hwnd, SW_MINIMIZE);
+        break;
+      case AI_FRAME_TOGGLE_MAXIMIZE:
+        ShowWindowAsync(
+            hwnd, context->all_maximized ? SW_RESTORE : SW_MAXIMIZE);
+        break;
+      case AI_FRAME_CLOSE:
+        /* Preserve each session's normal close confirmation. */
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        break;
+    }
+    return TRUE;
+}
+
+static void apply_global_frame_action(AiFrameAction action)
+{
+    SessionActionContext context;
+
+    memset(&context, 0, sizeof(context));
+    context.action = action;
+    context.all_maximized = true;
+    EnumWindows(enum_session_window_state, (LPARAM)&context);
+    if (!context.any_window)
+        return;
+    EnumWindows(apply_session_window_action, (LPARAM)&context);
+}
+
 static void refresh_host_sessions(AiPanel *panel)
 {
     SessionEnumContext context;
@@ -401,6 +462,23 @@ static void refresh_host_sessions(AiPanel *panel)
         }
     }
     InvalidateRect(panel->host_tabs, NULL, FALSE);
+}
+
+static void update_session_metadata(AiPanel *panel)
+{
+    wchar_t label[192];
+
+    if (!panel || !panel->session_metadata)
+        return;
+    if (panel->current_user[0]) {
+        _snwprintf(
+            label, lenof(label), L"%s (%s)",
+            panel->current_host, panel->current_user);
+    } else {
+        _snwprintf(label, lenof(label), L"%s", panel->current_host);
+    }
+    label[lenof(label) - 1] = L'\0';
+    SetWindowTextW(panel->session_metadata, label);
 }
 
 static void draw_monitor_icon(HDC dc, int x, int y, COLORREF colour)
@@ -600,6 +678,18 @@ static LRESULT CALLBACK host_tabs_wndproc(
                 static const int text_anchors[5] = {
                     58, 283, 518, 753, 990,
                 };
+                static const int no_user_icon_anchors[4] = {
+                    32, 374, 683, 965,
+                };
+                static const int no_user_text_anchors[4] = {
+                    58, 400, 709, 990,
+                };
+                static const size_t user_fields[5] = { 0, 1, 2, 3, 4 };
+                static const size_t no_user_fields[4] = { 0, 2, 3, 4 };
+                const int *visible_icon_anchors;
+                const int *visible_text_anchors;
+                const size_t *visible_fields;
+                size_t visible_count;
                 RECT info_bar = {
                     0, AI_HOST_TABS_HEADER_HEIGHT,
                     client.right, client.bottom,
@@ -618,15 +708,28 @@ static LRESULT CALLBACK host_tabs_wndproc(
                     now.wHour, now.wMinute, now.wSecond);
                 for (i = 0; i < 5; i++)
                     labels[i][lenof(labels[i]) - 1] = L'\0';
+                if (panel->current_user[0]) {
+                    visible_icon_anchors = icon_anchors;
+                    visible_text_anchors = text_anchors;
+                    visible_fields = user_fields;
+                    visible_count = lenof(user_fields);
+                } else {
+                    visible_icon_anchors = no_user_icon_anchors;
+                    visible_text_anchors = no_user_text_anchors;
+                    visible_fields = no_user_fields;
+                    visible_count = lenof(no_user_fields);
+                }
                 FillRect(dc, &info_bar, info);
                 SelectObject(dc, panel->title_font);
-                for (i = 0; i < 5; i++) {
+                for (i = 0; i < visible_count; i++) {
+                    size_t field = visible_fields[i];
                     int icon_x =
-                        (client.right * icon_anchors[i] + 614) / 1228;
+                        (client.right * visible_icon_anchors[i] + 614) / 1228;
                     int text_x =
-                        (client.right * text_anchors[i] + 614) / 1228;
-                    int right_x = i + 1 < 5 ?
-                        (client.right * icon_anchors[i + 1] + 614) / 1228 - 8 :
+                        (client.right * visible_text_anchors[i] + 614) / 1228;
+                    int right_x = i + 1 < visible_count ?
+                        (client.right * visible_icon_anchors[i + 1] + 614) /
+                        1228 - 8 :
                         client.right - 8;
                     RECT label_rect = {
                         text_x,
@@ -635,10 +738,10 @@ static LRESULT CALLBACK host_tabs_wndproc(
                         client.bottom,
                     };
                     draw_info_icon(
-                        dc, icon_x,
-                        AI_HOST_TABS_HEADER_HEIGHT + 14, (unsigned)i);
+                        dc, icon_x, AI_HOST_TABS_HEADER_HEIGHT + 14,
+                        (unsigned)field);
                     DrawTextW(
-                        dc, labels[i], -1, &label_rect,
+                        dc, labels[field], -1, &label_rect,
                         DT_SINGLELINE | DT_VCENTER | DT_LEFT |
                         DT_END_ELLIPSIS | DT_NOPREFIX);
                 }
@@ -684,9 +787,7 @@ static LRESULT CALLBACK host_tabs_wndproc(
       case WM_LBUTTONDBLCLK:
         if (panel && (int)(short)HIWORD(lParam) <
                          AI_HOST_TABS_HEADER_HEIGHT) {
-            ShowWindow(
-                panel->wgs->term_hwnd,
-                IsZoomed(panel->wgs->term_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            apply_global_frame_action(AI_FRAME_TOGGLE_MAXIMIZE);
             return 0;
         }
         break;
@@ -2685,7 +2786,8 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
     const wchar_t *rich_class = L"EDIT";
     wchar_t session_label[192];
     wchar_t *host_w, *username_w;
-    const char *host, *username;
+    const char *host;
+    char *username;
     memset(panel, 0, sizeof(*panel));
     panel->wgs = wgs;
     panel->candidate_start = panel->candidate_end = -1;
@@ -2703,10 +2805,10 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
         panel->title_font = panel->ui_font;
     panel->panel_brush = CreateSolidBrush(RGB(246, 248, 251));
     host = conf_get_str(wgs->conf, CONF_host);
-    username = conf_get_str_ambi(wgs->conf, CONF_username, NULL);
+    username = get_remote_username(wgs->conf);
     host_w = dup_mb_to_wc(CP_UTF8, host && host[0] ? host : "-");
     username_w = dup_mb_to_wc(
-        CP_UTF8, username && username[0] ? username : "-");
+        CP_UTF8, username && username[0] ? username : "");
     lstrcpynW(
         panel->current_host, host_w,
         lenof(panel->current_host));
@@ -2715,9 +2817,15 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
         lenof(panel->current_user));
     sfree(username_w);
     sfree(host_w);
-    _snwprintf(
-        session_label, lenof(session_label), L"%s (%s)",
-        panel->current_host, panel->current_user);
+    sfree(username);
+    if (panel->current_user[0]) {
+        _snwprintf(
+            session_label, lenof(session_label), L"%s (%s)",
+            panel->current_host, panel->current_user);
+    } else {
+        _snwprintf(
+            session_label, lenof(session_label), L"%s", panel->current_host);
+    }
     session_label[lenof(session_label) - 1] = L'\0';
     panel->rich_edit_module = LoadLibraryW(L"Msftedit.dll");
     if (panel->rich_edit_module) {
@@ -2887,6 +2995,23 @@ void ai_panel_destroy(AiPanel *panel)
     if (panel->panel_brush)
         DeleteObject(panel->panel_brush);
     sfree(panel);
+}
+
+void ai_panel_set_current_user(AiPanel *panel, const char *username)
+{
+    wchar_t *username_w;
+
+    if (!panel || !username || !username[0])
+        return;
+    username_w = dup_mb_to_wc(CP_UTF8, username);
+    if (!username_w || !username_w[0]) {
+        sfree(username_w);
+        return;
+    }
+    lstrcpynW(panel->current_user, username_w, lenof(panel->current_user));
+    sfree(username_w);
+    update_session_metadata(panel);
+    InvalidateRect(panel->host_tabs, NULL, FALSE);
 }
 
 int ai_panel_width(const AiPanel *panel)
@@ -3088,19 +3213,17 @@ bool ai_panel_handle_command(
         return true;
       case IDC_AI_MINIMIZE:
         if (notification == BN_CLICKED)
-            ShowWindow(panel->wgs->term_hwnd, SW_MINIMIZE);
+            apply_global_frame_action(AI_FRAME_MINIMIZE);
         return true;
       case IDC_AI_MAXIMIZE:
         if (notification == BN_CLICKED) {
-            ShowWindow(
-                panel->wgs->term_hwnd,
-                IsZoomed(panel->wgs->term_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            apply_global_frame_action(AI_FRAME_TOGGLE_MAXIMIZE);
             InvalidateRect(panel->maximize, NULL, TRUE);
         }
         return true;
       case IDC_AI_CLOSE:
         if (notification == BN_CLICKED)
-            SendMessageW(panel->wgs->term_hwnd, WM_CLOSE, 0, 0);
+            apply_global_frame_action(AI_FRAME_CLOSE);
         return true;
       case IDC_AI_SAVE:
         if (notification == BN_CLICKED)

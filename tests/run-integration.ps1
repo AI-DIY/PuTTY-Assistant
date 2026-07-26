@@ -204,6 +204,9 @@ public static class PuttyAiAutomation
     public delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+    [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
 
     [DllImport("user32.dll")]
@@ -263,6 +266,22 @@ public static class PuttyAiAutomation
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll")]
+    public static extern bool RedrawWindow(
+        IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+
+    [DllImport("gdi32.dll")]
+    public static extern uint GetPixel(IntPtr dc, int x, int y);
 
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
@@ -357,6 +376,10 @@ public static class PuttyAiAutomation
 }
 '@
 
+# Keep one-pixel custom-frame coordinates in physical pixels. Otherwise
+# cross-process window APIs virtualize them at non-100% display scaling.
+[PuttyAiAutomation]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
+
 function Get-WindowText([IntPtr]$Handle) {
     $buffer = New-Object Text.StringBuilder 65536
     [PuttyAiAutomation]::SendMessageBuffer(
@@ -393,6 +416,74 @@ function Find-Window([int]$ProcessId, [string]$ClassName, [string]$TitlePrefix =
         return $true
     }, [IntPtr]::Zero) | Out-Null
     return $script:foundWindow
+}
+
+function Assert-CustomFramePixels([IntPtr]$Window, [string]$State) {
+    $rect = [PuttyAiAutomation+RECT]::new()
+    [PuttyAiAutomation]::FocusWindow($Window) | Out-Null
+    Start-Sleep -Milliseconds 100
+    if (-not [PuttyAiAutomation]::GetWindowRect($Window, [ref]$rect)) {
+        throw "Could not inspect the custom frame in the $State state"
+    }
+
+    # Establish the full parent/child image, then repaint only the parent.
+    # Without WS_CLIPCHILDREN the second pass deterministically overwrites the
+    # one-pixel child controls that make up the custom frame.
+    $fullRedrawFlags = 0x0001 -bor 0x0004 -bor 0x0080 -bor 0x0100
+    if (-not [PuttyAiAutomation]::RedrawWindow(
+            $Window, [IntPtr]::Zero, [IntPtr]::Zero, $fullRedrawFlags)) {
+        throw "Could not establish the custom frame in the $State state"
+    }
+    $redrawFlags = 0x0001 -bor 0x0004 -bor 0x0040 -bor 0x0100
+    if (-not [PuttyAiAutomation]::RedrawWindow(
+            $Window, [IntPtr]::Zero, [IntPtr]::Zero, $redrawFlags)) {
+        throw "Could not force a parent-only redraw in the $State state"
+    }
+
+    $frameControls = @(
+        @("top", 0x7120, $true),
+        @("bottom", 0x7121, $true),
+        @("left", 0x7122, $false),
+        @("right", 0x7123, $false)
+    )
+    $expected = [uint32]0x00977E69
+    foreach ($frameControl in $frameControls) {
+        $name = [string]$frameControl[0]
+        $control = [PuttyAiAutomation]::GetDlgItem(
+            $Window, [int]$frameControl[1])
+        $controlRect = [PuttyAiAutomation+RECT]::new()
+        if ($control -eq [IntPtr]::Zero -or
+            -not [PuttyAiAutomation]::GetWindowRect(
+                $control, [ref]$controlRect)) {
+            throw "Could not inspect the $name custom frame in the $State state"
+        }
+        $horizontal = [bool]$frameControl[2]
+        $length = if ($horizontal) {
+            $controlRect.right - $controlRect.left
+        } else {
+            $controlRect.bottom - $controlRect.top
+        }
+        $dc = [PuttyAiAutomation]::GetDC($control)
+        if ($dc -eq [IntPtr]::Zero) {
+            throw "Could not sample the $name custom frame in the $State state"
+        }
+        try {
+            foreach ($numerator in 1..5) {
+                $position = [int](($length - 1) * $numerator / 6)
+                $x = if ($horizontal) { $position } else { 0 }
+                $y = if ($horizontal) { 0 } else { $position }
+                $pixel = [PuttyAiAutomation]::GetPixel($dc, $x, $y)
+                if ($pixel -ne $expected) {
+                    throw "The $name custom frame was partially overwritten " +
+                        "in the $State state at offset ${position}: expected " +
+                        "0x$($expected.ToString('X8')), got 0x$($pixel.ToString('X8'))"
+                }
+            }
+        }
+        finally {
+            [PuttyAiAutomation]::ReleaseDC($control, $dc) | Out-Null
+        }
+    }
 }
 
 function Test-BastionDirectLaunch([string[]]$Arguments) {
@@ -548,6 +639,11 @@ try {
     if ($missingControls.Count) {
         throw "AI panel controls were not created: $($missingControls -join ', ')"
     }
+    $sessionMetadata = [PuttyAiAutomation]::GetDlgItem($main, 0x7119)
+    if ($sessionMetadata -eq [IntPtr]::Zero -or
+        (Get-WindowText $sessionMetadata) -match "\(-\)$") {
+        throw "A session without a known login user still displayed a placeholder user"
+    }
     if ((Get-WindowText $settings) -ne $settingsLabel -or
         (Get-WindowText $ask) -ne $sendLabel -or
         (Get-WindowText $context) -ne $contextLabel -or
@@ -574,7 +670,8 @@ try {
     $outerLeftRect = [PuttyAiAutomation+RECT]::new()
     $outerRightRect = [PuttyAiAutomation+RECT]::new()
     $leftSeparatorRect = [PuttyAiAutomation+RECT]::new()
-    if (-not [PuttyAiAutomation]::GetWindowRect($hostTabs, [ref]$hostTabsRect) -or
+    if (-not [PuttyAiAutomation]::GetWindowRect($main, [ref]$mainRect) -or
+        -not [PuttyAiAutomation]::GetWindowRect($hostTabs, [ref]$hostTabsRect) -or
         -not [PuttyAiAutomation]::GetWindowRect($background, [ref]$backgroundRect) -or
         -not [PuttyAiAutomation]::GetWindowRect($title, [ref]$titleRect) -or
         -not [PuttyAiAutomation]::GetWindowRect($minimize, [ref]$minimizeRect) -or
@@ -601,7 +698,13 @@ try {
         $closeRect.right -ne $hostTabsRect.right -or
         $closeRect.bottom -gt
             ($hostTabsRect.top + 44)) {
-        throw "Window controls were not placed in the full-width global header"
+        throw "Window controls were not placed in the full-width global header " +
+            "(tabs=$($hostTabsRect.left),$($hostTabsRect.top),$($hostTabsRect.right),$($hostTabsRect.bottom); " +
+            "background=$($backgroundRect.left),$($backgroundRect.top),$($backgroundRect.right),$($backgroundRect.bottom); " +
+            "top=$($outerTopRect.left),$($outerTopRect.top),$($outerTopRect.right),$($outerTopRect.bottom); " +
+            "right=$($outerRightRect.left),$($outerRightRect.top),$($outerRightRect.right),$($outerRightRect.bottom); " +
+            "minimize=$($minimizeRect.left),$($minimizeRect.top),$($minimizeRect.right),$($minimizeRect.bottom); " +
+            "close=$($closeRect.left),$($closeRect.top),$($closeRect.right),$($closeRect.bottom))"
     }
     if ($outerTopRect.left -ne $mainRect.left -or
         $outerTopRect.top -ne $mainRect.top -or
@@ -619,8 +722,18 @@ try {
         $outerRightRect.top -ne $outerTopRect.bottom -or
         $outerRightRect.bottom -ne $outerBottomRect.top -or
         ($outerRightRect.right - $outerRightRect.left) -ne 1) {
-        throw "The custom frame did not enclose all four sides of the PuTTY window"
+        throw "The custom frame did not enclose all four sides of the PuTTY window " +
+            "(window=$($mainRect.left),$($mainRect.top),$($mainRect.right),$($mainRect.bottom); " +
+            "top=$($outerTopRect.left),$($outerTopRect.top),$($outerTopRect.right),$($outerTopRect.bottom); " +
+            "bottom=$($outerBottomRect.left),$($outerBottomRect.top),$($outerBottomRect.right),$($outerBottomRect.bottom); " +
+            "left=$($outerLeftRect.left),$($outerLeftRect.top),$($outerLeftRect.right),$($outerLeftRect.bottom); " +
+            "right=$($outerRightRect.left),$($outerRightRect.top),$($outerRightRect.right),$($outerRightRect.bottom))"
     }
+    $mainStyle = [PuttyAiAutomation]::GetWindowLongPtr($main, -16).ToInt64()
+    if (($mainStyle -band 0x02000000) -eq 0) {
+        throw "The terminal parent does not clip drawing around its child controls"
+    }
+    Assert-CustomFramePixels $main "initial"
     if ([PuttyAiAutomation]::GetDlgItem($main, 0x7117) -ne [IntPtr]::Zero) {
         throw "The obsolete user-selectable conversation history control is still present"
     }
@@ -681,12 +794,14 @@ try {
     if (-not [PuttyAiAutomation]::IsZoomed($main)) {
         throw "Global maximize button did not maximize the PuTTY window"
     }
+    Assert-CustomFramePixels $main "maximized"
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
     Start-Sleep -Milliseconds 200
     if ([PuttyAiAutomation]::IsZoomed($main)) {
         throw "Global maximize button did not restore the PuTTY window"
     }
+    Assert-CustomFramePixels $main "maximized-then-restored"
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711D, $minimize) | Out-Null
     Start-Sleep -Milliseconds 200
@@ -698,6 +813,7 @@ try {
     if ([PuttyAiAutomation]::IsIconic($main)) {
         throw "PuTTY window could not be restored after minimizing"
     }
+    Assert-CustomFramePixels $main "minimized-then-restored"
     if (@(0x7111, 0x7112, 0x7113) | Where-Object {
             [PuttyAiAutomation]::GetDlgItem($main, $_) -ne [IntPtr]::Zero
         }) {
@@ -1158,9 +1274,43 @@ try {
         $sessionCount -lt 2) {
         throw "Concurrent PuTTY sessions were not exposed in the host tab bar"
     }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if (-not [PuttyAiAutomation]::IsZoomed($main) -or
+        -not [PuttyAiAutomation]::IsZoomed($tabMain)) {
+        throw "Global maximize did not affect every PuTTY session"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if ([PuttyAiAutomation]::IsZoomed($main) -or
+        [PuttyAiAutomation]::IsZoomed($tabMain)) {
+        throw "Global maximize restore did not affect every PuTTY session"
+    }
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x711D, $minimize) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if (-not [PuttyAiAutomation]::IsIconic($main) -or
+        -not [PuttyAiAutomation]::IsIconic($tabMain)) {
+        throw "Global minimize did not affect every PuTTY session"
+    }
+    [PuttyAiAutomation]::ShowWindow($main, 9) | Out-Null
+    [PuttyAiAutomation]::ShowWindow($tabMain, 9) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if ([PuttyAiAutomation]::IsIconic($main) -or
+        [PuttyAiAutomation]::IsIconic($tabMain)) {
+        throw "A globally minimized PuTTY session could not be restored"
+    }
     if ((Get-WindowText $tabTranscript).Contains($firstAnswerMarker)) {
         throw "AI conversation leaked from one host session into another"
     }
+    [PuttyAiAutomation]::SetForegroundWindow($main) | Out-Null
+    Start-Sleep -Milliseconds 100
+    Assert-CustomFramePixels $main "concurrent-primary"
+    [PuttyAiAutomation]::SetForegroundWindow($tabMain) | Out-Null
+    Start-Sleep -Milliseconds 100
+    Assert-CustomFramePixels $tabMain "concurrent-secondary"
     $targetTabIndex = -1
     for ($i = 0; $i -lt $sessionCount; $i++) {
         $sessionWindow = [PuttyAiAutomation]::SendMessage(
@@ -1313,7 +1463,7 @@ try {
         ContextSwitch = "visible toggle; disabled by default"
         ConversationHistory = "always retained; no user-facing option"
         StandaloneClear = "passed"
-        WindowControls = "minimize, maximize/restore, and close"
+        WindowControls = "minimize, maximize/restore, and close across all sessions"
         InitialPlacement = "centred"
         GlobalHeader = "full-width"
         CompleteFrame = "all four sides"

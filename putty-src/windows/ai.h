@@ -35,6 +35,7 @@ int ai_panel_default_width(void);
 int ai_panel_terminal_top(void);
 AiPanel *ai_panel_create(WinGuiSeat *wgs);
 void ai_panel_destroy(AiPanel *panel);
+void ai_panel_set_current_user(AiPanel *panel, const char *username);
 int ai_panel_width(const AiPanel *panel);
 void ai_panel_layout(AiPanel *panel);
 bool ai_panel_handle_command(

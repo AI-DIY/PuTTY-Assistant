@@ -16,6 +16,20 @@ void out_of_memory(void) { fatal_error("out of memory"); }
 static DWORD target_pid;
 static HWND target_window;
 
+static void enable_physical_window_coordinates(void)
+{
+    typedef HANDLE (WINAPI *SetThreadDpiAwarenessContextFn)(HANDLE);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    SetThreadDpiAwarenessContextFn set_thread_dpi_awareness = user32 ?
+        (SetThreadDpiAwarenessContextFn)GetProcAddress(
+            user32, "SetThreadDpiAwarenessContext") : NULL;
+
+    if (set_thread_dpi_awareness)
+        set_thread_dpi_awareness((HANDLE)(INT_PTR)-4);
+    else
+        SetProcessDPIAware();
+}
+
 static BOOL CALLBACK find_process_window(HWND hwnd, LPARAM lParam)
 {
     DWORD pid = 0;
@@ -36,6 +50,8 @@ int main(int argc, char **argv)
 {
     Filename *outfile = NULL;
     HWND target;
+
+    enable_physical_window_coordinates();
 
     AuxMatchOpt amo = aux_match_opt_init(fatal_error);
     while (!aux_match_done(&amo)) {

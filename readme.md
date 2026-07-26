@@ -10,12 +10,12 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
 ![Language](https://img.shields.io/badge/language-C-A8B9CC?style=flat-square)
-![Version](https://img.shields.io/badge/version-v1.0.1-success?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.0.2-success?style=flat-square)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.1` 已完成本轮开发、问题修复、功能优化和回归测试。Windows 客户端已集成 AI 侧边栏、可选终端上下文、兼容模型接口、命令确认与安全控制。AI 输出仍可能出错，执行任何生成命令前必须人工复核，暂不建议直接用于无人值守生产操作。
+> `v1.0.2` 已完成本轮开发、问题修复、功能优化和回归测试。Windows 客户端已集成 AI 侧边栏、可选终端上下文、兼容模型接口、命令确认与安全控制。AI 输出仍可能出错，执行任何生成命令前必须人工复核，暂不建议直接用于无人值守生产操作。
 
 本项目由独立开发者维护，不隶属于 PuTTY、OpenAI、任何模型服务商或堡垒机产品供应商，也不代表这些项目或机构获得授权、赞助或认可。第三方名称仅用于说明兼容性和许可证归属，相关权利归各自权利人所有。
 
@@ -78,6 +78,8 @@ flowchart LR
 - 用户问题、AI 回复、系统消息和错误消息使用不同的标签色、正文色和背景色；每条 AI 回复明确显示“AI 助手”，各轮之间使用细线分隔，连续多轮对话仍能快速分辨双方内容。
 - 候选命令不再使用含义不明确的固定按钮；鼠标悬停到回复代码块时显示 **填入终端**，危险命令显示 **检查并填入**。
 - 多个 PuTTY 主机连接会显示在顶部标签栏；切换标签时终端和右侧 AI 会话一起切换，每个主机只显示自己的聊天记录。
+- 顶部全局窗口控制会同时最小化、最大化/还原或关闭所有正在运行的 PuTTY AI 会话，关闭时仍保留每个会话原有的确认保护。
+- 主机信息栏会显示已配置或 SSH `login as:` 提示中实际输入的登录用户；无法可靠获取时，用户信息项和会话标签会自动隐藏，不再显示占位符。
 - 底部操作区使用独立的脱敏终端上下文切换按钮和清空对话按钮；会话历史始终在当前主机内保留，不再暴露容易误操作的保存选项。
 - 脱敏终端上下文的文字和切换轨道按内容紧凑排列；首次打开的主窗口会在当前显示器工作区居中显示。
 - 主窗口关闭 DWM 残留的非客户区绘制并使用方角，在客户区最外层自绘连续四边框；顶部主机栏、左侧终端和右侧 AI 面板全部被同一外框完整包围，长时间运行和应用切换后也不会出现残破边缘。
@@ -209,7 +211,7 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 远程验证默认连接 `ssh.github.com:443`，禁用 Pageant 和连接共享，只验证主机密钥协商及服务端进入 `publickey` 认证阶段。未提供凭据时出现 `No supported authentication methods available (server sent: publickey)` 是预期结果，表示 SSH 连接和握手已经成功到达认证阶段。
 
-打包产物位于 `package/PuTTY-AI-v1.0.1-windows-x64.zip`，包含 `putty.exe`、应用本地 VC Runtime、项目与 PuTTY 许可证、第三方说明和发布说明。
+打包产物位于 `package/PuTTY-AI-v1.0.2-windows-x64.zip`，包含 `putty.exe`、应用本地 VC Runtime、项目与 PuTTY 许可证、第三方说明和发布说明。
 
 ## 已完成的开发内容
 

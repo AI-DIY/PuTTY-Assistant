@@ -9,12 +9,12 @@ An AI-enhanced SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~s
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
 ![Language](https://img.shields.io/badge/language-C-A8B9CC?style=flat-square)
-![Version](https://img.shields.io/badge/version-v1.0.1-success?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.0.2-success?style=flat-square)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.1` has completed the current development, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
+> `v1.0.2` has completed the current development, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
 
 This is an independently maintained project. It is not affiliated with, authorized by, sponsored by, or endorsed by PuTTY, OpenAI, any model provider, or any bastion-client vendor. Third-party names are used only to describe compatibility and license attribution; all related rights belong to their respective owners.
 
@@ -111,7 +111,8 @@ After establishing an SSH session, the PuTTY AI panel appears on the right:
 6. Each host supports a multi-turn conversation. Later questions always include previous successful questions and answers, without exposing a user-facing history-save option. The system asks the model to reply in Simplified Chinese by default, but permits analysis and plain-text conclusions without requiring a command in every answer. Conversation history is isolated by host.
 7. Markdown headings, lists, and code blocks in replies are rendered in the conversation area. Hover over a detected command block to reveal **填入终端**; the program only fills the command into the terminal and does not press Enter automatically.
 8. Clicking the terminal after using the right-side chat restores keyboard interaction. High-risk commands such as deleting files, formatting disks, stopping services, or changing permissions require two confirmations.
-9. The black host bar at the top lists running PuTTY sessions. Selecting a host switches the terminal process and its associated AI panel together. **清空对话** is a standalone action and requests confirmation before clearing the current host's history.
+9. The black host bar at the top lists running PuTTY sessions. Selecting a host switches the terminal process and its associated AI panel together. Its minimize, maximize/restore, and close controls apply to every running PuTTY AI session; normal close confirmation remains in effect for each session. **清空对话** is a standalone action and requests confirmation before clearing the current host's history.
+10. The host information bar shows the configured username or the value entered at the SSH `login as:` prompt. When a reliable username is unavailable, the user field and the session-label placeholder are hidden.
 
 The window follows the supplied UI design with a client-drawn one-pixel outline, full-width 44/46-pixel session and host-information bars, a cool-gray 440-pixel AI panel with a white conversation surface, layered prompt actions, and global minimize, maximize/restore, and close controls in the black upper bar. DWM non-client rendering is disabled so the outline remains continuous around the terminal and AI panel without stale frame fragments. The first window is centred in the current monitor's working area, and the context switch is grouped tightly with its label. The panel shrinks responsively in narrow windows while retaining an interactive terminal area. User and AI role headings use the same Microsoft YaHei UI font, size, and weight for consistent Chinese and Latin typography.
 
@@ -153,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 Remote verification connects to `ssh.github.com:443` by default, disables Pageant and connection sharing, and verifies only host-key negotiation and the server entering the `publickey` authentication stage. Without credentials, `No supported authentication methods available (server sent: publickey)` is an expected result: it means the SSH connection and handshake successfully reached authentication.
 
-The packaged artifact is `package/PuTTY-AI-v1.0.1-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
+The packaged artifact is `package/PuTTY-AI-v1.0.2-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
 
 ## Development Plan
 
