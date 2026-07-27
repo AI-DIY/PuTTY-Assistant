@@ -264,6 +264,24 @@ public static class PuttyAiAutomation
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode,
+        EntryPoint = "SendMessageTimeoutW")]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam,
+        uint flags, uint timeout, out IntPtr result);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(
+        IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height,
+        uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(
+        uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
@@ -303,6 +321,22 @@ public static class PuttyAiAutomation
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(IntPtr hwnd);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenThread(
+        uint access, bool inheritHandle, uint threadId);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SuspendThread(IntPtr thread);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint ResumeThread(IntPtr thread);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
@@ -418,6 +452,97 @@ function Find-Window([int]$ProcessId, [string]$ClassName, [string]$TitlePrefix =
     return $script:foundWindow
 }
 
+function Assert-WindowResponsive(
+    [IntPtr]$Window, [string]$State, [uint32]$Timeout = 250) {
+    $result = [IntPtr]::Zero
+    # WM_NULL must be answered by the target UI thread without changing state.
+    if ([PuttyAiAutomation]::SendMessageTimeout(
+            $Window, 0, [IntPtr]::Zero, [IntPtr]::Zero, 2, $Timeout,
+            [ref]$result) -eq [IntPtr]::Zero) {
+        throw "PuTTY stopped responding after $State"
+    }
+}
+
+function Activate-TestWindow([IntPtr]$Window, [string]$Name) {
+    for ($i = 0; $i -lt 4; $i++) {
+        [PuttyAiAutomation]::ShowWindow($Window, 9) | Out-Null
+        [PuttyAiAutomation]::BringWindowToTop($Window) | Out-Null
+        [PuttyAiAutomation]::SetForegroundWindow($Window) | Out-Null
+        if ([PuttyAiAutomation]::GetForegroundWindow() -eq $Window) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    # Some Windows sessions deny programmatic foreground changes even after
+    # real input was sent. The activation message regression below remains
+    # deterministic, so keep the best-effort switch non-fatal here.
+    return $false
+}
+
+function Invoke-EdgeResize([IntPtr]$Window, [string]$Edge, [int]$Delta) {
+    $rect = [PuttyAiAutomation+RECT]::new()
+    if (-not [PuttyAiAutomation]::GetWindowRect($Window, [ref]$rect)) {
+        throw "Could not inspect the window before the $Edge drag"
+    }
+    $x = switch ($Edge) {
+        "left" { $rect.left + 1; break }
+        "right" { $rect.right - 2; break }
+        default { $rect.left + (($rect.right - $rect.left) / 2) }
+    }
+    $y = switch ($Edge) {
+        "top" { $rect.top + 1; break }
+        "bottom" { $rect.bottom - 2; break }
+        default { $rect.top + (($rect.bottom - $rect.top) / 2) }
+    }
+    [PuttyAiAutomation]::SetForegroundWindow($Window) | Out-Null
+    [PuttyAiAutomation]::SetCursorPos([int]$x, [int]$y) | Out-Null
+    [PuttyAiAutomation]::mouse_event(
+        0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    for ($step = 1; $step -le 8; $step++) {
+        $offset = [int]($Delta * $step / 8)
+        $nextX = if ($Edge -eq "left") { $x + $offset } elseif ($Edge -eq "right") { $x + $offset } else { $x }
+        $nextY = if ($Edge -eq "top") { $y + $offset } elseif ($Edge -eq "bottom") { $y + $offset } else { $y }
+        [PuttyAiAutomation]::SetCursorPos($nextX, $nextY) | Out-Null
+        Start-Sleep -Milliseconds 25
+    }
+    [PuttyAiAutomation]::mouse_event(
+        0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 150
+    $after = [PuttyAiAutomation+RECT]::new()
+    [PuttyAiAutomation]::GetWindowRect($Window, [ref]$after) | Out-Null
+    return $after
+}
+
+function Assert-NoStaleFramePixel(
+    [IntPtr]$Window, $Before, $After, [string]$Edge) {
+    $x = [int](($After.right - $After.left) / 2)
+    $y = [int](($After.bottom - $After.top) / 2)
+    switch ($Edge) {
+        "left" { $x = $Before.left - $After.left; break }
+        "right" { $x = $Before.right - 1 - $After.left; break }
+        "top" { $y = $Before.top - $After.top; break }
+        "bottom" { $y = $Before.bottom - 1 - $After.top; break }
+    }
+    if ($x -lt 0 -or $y -lt 0 -or
+        $x -ge ($After.right - $After.left) -or
+        $y -ge ($After.bottom - $After.top)) {
+        return
+    }
+    $dc = [PuttyAiAutomation]::GetDC($Window)
+    if ($dc -eq [IntPtr]::Zero) {
+        throw "Could not sample the old $Edge frame position after a drag"
+    }
+    try {
+        $pixel = [PuttyAiAutomation]::GetPixel($dc, $x, $y)
+        if ($pixel -eq [uint32]0x00977E69) {
+            throw "The old $Edge frame remained visible after an interactive resize"
+        }
+    }
+    finally {
+        [PuttyAiAutomation]::ReleaseDC($Window, $dc) | Out-Null
+    }
+}
+
 function Assert-CustomFramePixels([IntPtr]$Window, [string]$State) {
     $rect = [PuttyAiAutomation+RECT]::new()
     [PuttyAiAutomation]::FocusWindow($Window) | Out-Null
@@ -524,6 +649,9 @@ $server = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru
 $putty = $null
 $putty2 = $null
 $puttyTab = $null
+$otherApp = $null
+$hungPutty = $null
+$hungThread = [IntPtr]::Zero
 
 try {
     Start-Sleep -Milliseconds 700
@@ -734,6 +862,85 @@ try {
         throw "The terminal parent does not clip drawing around its child controls"
     }
     Assert-CustomFramePixels $main "initial"
+
+    # Exercise every interactive resize direction. The custom frame must move
+    # with the client area and remain repaintable after each edge changes.
+    $originalRect = [PuttyAiAutomation+RECT]::new()
+    [PuttyAiAutomation]::GetWindowRect($main, [ref]$originalRect) | Out-Null
+    $dragCases = @(
+        @{ Edge = "left"; Delta = -40 },
+        @{ Edge = "right"; Delta = 40 },
+        @{ Edge = "top"; Delta = -40 },
+        @{ Edge = "bottom"; Delta = 40 }
+    )
+    foreach ($dragCase in $dragCases) {
+        $edge = $dragCase.Edge
+        $beforeResize = [PuttyAiAutomation+RECT]::new()
+        [PuttyAiAutomation]::GetWindowRect($main, [ref]$beforeResize) | Out-Null
+        $afterResize = Invoke-EdgeResize $main $edge $dragCase.Delta
+        Assert-NoStaleFramePixel $main $beforeResize $afterResize $edge
+        Assert-CustomFramePixels $main "mouse-$edge-edge"
+    }
+    [PuttyAiAutomation]::SetWindowPos(
+        $main, [IntPtr]::Zero, $originalRect.left, $originalRect.top,
+        $originalRect.right - $originalRect.left,
+        $originalRect.bottom - $originalRect.top, 0x0004 -bor 0x0010) | Out-Null
+    Start-Sleep -Milliseconds 150
+    Assert-CustomFramePixels $main "mouse-resize-restored"
+
+    $resizeFlags = 0x0004 -bor 0x0010 # SWP_NOZORDER | SWP_NOACTIVATE
+    $resizeCases = @(
+        @{ Name = "right-edge"; X = $originalRect.left; Y = $originalRect.top;
+           Width = ($originalRect.right - $originalRect.left) + 80;
+           Height = ($originalRect.bottom - $originalRect.top) },
+        @{ Name = "bottom-edge"; X = $originalRect.left; Y = $originalRect.top;
+           Width = ($originalRect.right - $originalRect.left) + 80;
+           Height = ($originalRect.bottom - $originalRect.top) + 60 },
+        @{ Name = "left-edge"; X = $originalRect.left - 40; Y = $originalRect.top;
+           Width = ($originalRect.right - $originalRect.left) + 120;
+           Height = ($originalRect.bottom - $originalRect.top) + 60 },
+        @{ Name = "top-edge"; X = $originalRect.left - 40; Y = $originalRect.top - 30;
+           Width = ($originalRect.right - $originalRect.left) + 120;
+           Height = ($originalRect.bottom - $originalRect.top) + 90 }
+    )
+    foreach ($resizeCase in $resizeCases) {
+        if (-not [PuttyAiAutomation]::SetWindowPos(
+                $main, [IntPtr]::Zero, $resizeCase.X, $resizeCase.Y,
+                $resizeCase.Width, $resizeCase.Height, $resizeFlags)) {
+            throw "Could not resize PuTTY through the $($resizeCase.Name)"
+        }
+        Start-Sleep -Milliseconds 150
+        Assert-CustomFramePixels $main $resizeCase.Name
+    }
+    [PuttyAiAutomation]::SetWindowPos(
+        $main, [IntPtr]::Zero, $originalRect.left, $originalRect.top,
+        $originalRect.right - $originalRect.left,
+        $originalRect.bottom - $originalRect.top, $resizeFlags) | Out-Null
+    Start-Sleep -Milliseconds 150
+    Assert-CustomFramePixels $main "resize-restored"
+
+    # A million-character setting must survive normalization, saving, and a
+    # later process startup instead of silently returning to the default.
+    $limit = [PuttyAiAutomation]::GetDlgItem($main, 0x7110)
+    [PuttyAiAutomation]::SendMessageText(
+        $limit, 0x000C, [IntPtr]::Zero, "1000000") | Out-Null
+    [PuttyAiAutomation]::SendMessage(
+        $main, 0x0111, [IntPtr]0x7114, $save) | Out-Null
+    if ((Get-WindowText $limit) -ne "1000000") {
+        throw "Saving a 1,000,000-character context limit changed the control to '$(Get-WindowText $limit)'"
+    }
+    $savedLimitKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+        $aiRegistryPath)
+    try {
+        if (-not $savedLimitKey -or
+            [uint32]$savedLimitKey.GetValue("ContextChars", 0) -ne 1000000) {
+            throw "A 1,000,000-character context limit was not persisted"
+        }
+    }
+    finally {
+        if ($savedLimitKey) { $savedLimitKey.Dispose() }
+    }
+
     if ([PuttyAiAutomation]::GetDlgItem($main, 0x7117) -ne [IntPtr]::Zero) {
         throw "The obsolete user-selectable conversation history control is still present"
     }
@@ -790,27 +997,43 @@ try {
     }
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
-    Start-Sleep -Milliseconds 200
-    if (-not [PuttyAiAutomation]::IsZoomed($main)) {
+    $maximized = $false
+    for ($i = 0; $i -lt 30 -and -not $maximized; $i++) {
+        Start-Sleep -Milliseconds 100
+        $maximized = [PuttyAiAutomation]::IsZoomed($main)
+    }
+    if (-not $maximized) {
         throw "Global maximize button did not maximize the PuTTY window"
     }
     Assert-CustomFramePixels $main "maximized"
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
-    Start-Sleep -Milliseconds 200
-    if ([PuttyAiAutomation]::IsZoomed($main)) {
+    $restored = $false
+    for ($i = 0; $i -lt 30 -and -not $restored; $i++) {
+        Start-Sleep -Milliseconds 100
+        $restored = -not [PuttyAiAutomation]::IsZoomed($main)
+    }
+    if (-not $restored) {
         throw "Global maximize button did not restore the PuTTY window"
     }
     Assert-CustomFramePixels $main "maximized-then-restored"
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711D, $minimize) | Out-Null
-    Start-Sleep -Milliseconds 200
-    if (-not [PuttyAiAutomation]::IsIconic($main)) {
+    $minimized = $false
+    for ($i = 0; $i -lt 30 -and -not $minimized; $i++) {
+        Start-Sleep -Milliseconds 100
+        $minimized = [PuttyAiAutomation]::IsIconic($main)
+    }
+    if (-not $minimized) {
         throw "Global minimize button did not minimize the PuTTY window"
     }
     [PuttyAiAutomation]::ShowWindow($main, 9) | Out-Null
-    Start-Sleep -Milliseconds 200
-    if ([PuttyAiAutomation]::IsIconic($main)) {
+    $restored = $false
+    for ($i = 0; $i -lt 30 -and -not $restored; $i++) {
+        Start-Sleep -Milliseconds 100
+        $restored = -not [PuttyAiAutomation]::IsIconic($main)
+    }
+    if (-not $restored) {
         throw "PuTTY window could not be restored after minimizing"
     }
     Assert-CustomFramePixels $main "minimized-then-restored"
@@ -1276,30 +1499,46 @@ try {
     }
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
-    Start-Sleep -Milliseconds 300
-    if (-not [PuttyAiAutomation]::IsZoomed($main) -or
-        -not [PuttyAiAutomation]::IsZoomed($tabMain)) {
+    $maximized = $false
+    for ($i = 0; $i -lt 30 -and -not $maximized; $i++) {
+        Start-Sleep -Milliseconds 100
+        $maximized = [PuttyAiAutomation]::IsZoomed($main) -and
+            [PuttyAiAutomation]::IsZoomed($tabMain)
+    }
+    if (-not $maximized) {
         throw "Global maximize did not affect every PuTTY session"
     }
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711E, $maximize) | Out-Null
-    Start-Sleep -Milliseconds 300
-    if ([PuttyAiAutomation]::IsZoomed($main) -or
-        [PuttyAiAutomation]::IsZoomed($tabMain)) {
+    $restored = $false
+    for ($i = 0; $i -lt 30 -and -not $restored; $i++) {
+        Start-Sleep -Milliseconds 100
+        $restored = -not [PuttyAiAutomation]::IsZoomed($main) -and
+            -not [PuttyAiAutomation]::IsZoomed($tabMain)
+    }
+    if (-not $restored) {
         throw "Global maximize restore did not affect every PuTTY session"
     }
     [PuttyAiAutomation]::SendMessage(
         $main, 0x0111, [IntPtr]0x711D, $minimize) | Out-Null
-    Start-Sleep -Milliseconds 300
-    if (-not [PuttyAiAutomation]::IsIconic($main) -or
-        -not [PuttyAiAutomation]::IsIconic($tabMain)) {
+    $minimized = $false
+    for ($i = 0; $i -lt 30 -and -not $minimized; $i++) {
+        Start-Sleep -Milliseconds 100
+        $minimized = [PuttyAiAutomation]::IsIconic($main) -and
+            [PuttyAiAutomation]::IsIconic($tabMain)
+    }
+    if (-not $minimized) {
         throw "Global minimize did not affect every PuTTY session"
     }
     [PuttyAiAutomation]::ShowWindow($main, 9) | Out-Null
     [PuttyAiAutomation]::ShowWindow($tabMain, 9) | Out-Null
-    Start-Sleep -Milliseconds 300
-    if ([PuttyAiAutomation]::IsIconic($main) -or
-        [PuttyAiAutomation]::IsIconic($tabMain)) {
+    $restored = $false
+    for ($i = 0; $i -lt 30 -and -not $restored; $i++) {
+        Start-Sleep -Milliseconds 100
+        $restored = -not [PuttyAiAutomation]::IsIconic($main) -and
+            -not [PuttyAiAutomation]::IsIconic($tabMain)
+    }
+    if (-not $restored) {
         throw "A globally minimized PuTTY session could not be restored"
     }
     if ((Get-WindowText $tabTranscript).Contains($firstAnswerMarker)) {
@@ -1370,7 +1609,7 @@ try {
         throw "Second PuTTY session was not created for persistence regression"
     }
     $endpoint2 = $model2 = $key2 = $settings2 = $prompt2 = $ask2 =
-        $status2 = $close2 = [IntPtr]::Zero
+        $limit2 = $status2 = $close2 = [IntPtr]::Zero
     for ($i = 0; $i -lt 50; $i++) {
         $endpoint2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x710A)
         $model2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x710C)
@@ -1378,10 +1617,11 @@ try {
         $settings2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7108)
         $prompt2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7104)
         $ask2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7105)
+        $limit2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7110)
         $status2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x7102)
         $close2 = [PuttyAiAutomation]::GetDlgItem($main2, 0x711F)
         if (-not (@(
-            $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2,
+            $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $limit2, $status2,
             $close2
         ) | Where-Object { $_ -eq [IntPtr]::Zero })) {
             break
@@ -1389,7 +1629,7 @@ try {
         Start-Sleep -Milliseconds 100
     }
     if (@(
-        $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $status2,
+        $endpoint2, $model2, $key2, $settings2, $prompt2, $ask2, $limit2, $status2,
         $close2
     ) |
         Where-Object { $_ -eq [IntPtr]::Zero }) {
@@ -1397,12 +1637,91 @@ try {
     }
     [PuttyAiAutomation]::SendMessage(
         $main2, 0x0111, [IntPtr]0x7108, $settings2) | Out-Null
-    if (-not [PuttyAiAutomation]::IsWindowVisible($endpoint2) -or
-        (Get-WindowText $endpoint2) -ne
-            "http://127.0.0.1:18080/v1/chat/completions" -or
-        (Get-WindowText $model2) -ne "persist-model") {
-        throw "Saved Chat Completions settings were not restored in the next session"
+    $restoredEndpoint = Get-WindowText $endpoint2
+    $restoredModel = Get-WindowText $model2
+    $restoredLimit = Get-WindowText $limit2
+    $settingsRestored =
+        [PuttyAiAutomation]::IsWindowVisible($endpoint2) -and
+        $restoredEndpoint -eq "http://127.0.0.1:18080/v1/chat/completions" -and
+        $restoredModel -eq "persist-model" -and
+        $restoredLimit -eq "1000000"
+    if (-not $settingsRestored) {
+        $debugKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+            $aiRegistryPath)
+        $debugRegistryLimit = if ($debugKey) {
+            $debugKey.GetValue("ContextChars", "<missing>")
+        } else { "<missing-key>" }
+        if ($debugKey) { $debugKey.Dispose() }
+        throw "Saved Chat Completions settings were not restored in the next session " +
+            "(visible=$([PuttyAiAutomation]::IsWindowVisible($endpoint2)); " +
+            "endpoint-eq=$($restoredEndpoint -eq 'http://127.0.0.1:18080/v1/chat/completions'); " +
+            "model-eq=$($restoredModel -eq 'persist-model'); " +
+            "limit-eq=$($restoredLimit -eq '1000000'); " +
+            "endpoint-bytes=$([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($restoredEndpoint))); " +
+            "model-bytes=$([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($restoredModel))); " +
+            "limit-bytes=$([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($restoredLimit))); " +
+            "registry-limit='$debugRegistryLimit')"
     }
+
+    # Switching between PuTTY sessions and a separate GUI process must not
+    # leave either PuTTY UI thread blocked by activation bookkeeping.
+    $otherApp = Start-Process -FilePath "$env:WINDIR\System32\notepad.exe" -PassThru
+    $otherWindow = [IntPtr]::Zero
+    for ($i = 0; $i -lt 50 -and $otherWindow -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 100
+        $otherWindow = Find-Window $otherApp.Id "Notepad"
+    }
+    if ($otherWindow -eq [IntPtr]::Zero) {
+        throw "The GUI peer used for the window-switch responsiveness test was not created"
+    }
+    $hungPutty = Start-Process -FilePath $ExePath -PassThru -ArgumentList @(
+        "-raw", "127.0.0.1", "-P", "18022"
+    )
+    $hungWindow = [IntPtr]::Zero
+    $hungMetadata = [IntPtr]::Zero
+    for ($i = 0; $i -lt 50 -and $hungMetadata -eq [IntPtr]::Zero; $i++) {
+        Start-Sleep -Milliseconds 100
+        $hungWindow = Find-Window $hungPutty.Id "PuTTY"
+        if ($hungWindow -ne [IntPtr]::Zero) {
+            $hungMetadata = [PuttyAiAutomation]::GetDlgItem($hungWindow, 0x7119)
+        }
+    }
+    if ($hungMetadata -eq [IntPtr]::Zero) {
+        throw "The suspended peer PuTTY session did not expose its session metadata control"
+    }
+    $hungProcessId = 0
+    $hungThreadId = [PuttyAiAutomation]::GetWindowThreadProcessId(
+        $hungWindow, [ref]$hungProcessId)
+    $hungThread = [PuttyAiAutomation]::OpenThread(
+        0x0002, $false, $hungThreadId)
+    if ($hungThread -eq [IntPtr]::Zero -or
+        [PuttyAiAutomation]::SuspendThread($hungThread) -eq [uint32]::MaxValue) {
+        throw "Could not suspend the peer PuTTY UI thread for the activation regression"
+    }
+    Activate-TestWindow $otherWindow "the GUI peer" | Out-Null
+    Start-Sleep -Milliseconds 100
+    Activate-TestWindow $main2 "PuTTY" | Out-Null
+    Assert-WindowResponsive $main2 "return while a peer PuTTY UI is suspended" 75
+    $activationTimer = [Diagnostics.Stopwatch]::StartNew()
+    [PuttyAiAutomation]::SendMessage(
+        $main2, 0x0006, [IntPtr]1, [IntPtr]::Zero) | Out-Null
+    $activationTimer.Stop()
+    if ($activationTimer.ElapsedMilliseconds -ge 75) {
+        throw "PuTTY activation spent $($activationTimer.ElapsedMilliseconds) ms querying a suspended peer"
+    }
+    [PuttyAiAutomation]::ResumeThread($hungThread) | Out-Null
+    [PuttyAiAutomation]::CloseHandle($hungThread) | Out-Null
+    $hungThread = [IntPtr]::Zero
+    for ($i = 0; $i -lt 40; $i++) {
+        Activate-TestWindow $main2 "PuTTY" | Out-Null
+        Start-Sleep -Milliseconds 20
+        Assert-WindowResponsive $main2 "switch $i to PuTTY" 1000
+        Activate-TestWindow $otherWindow "the GUI peer" | Out-Null
+        Start-Sleep -Milliseconds 20
+        Assert-WindowResponsive $main2 "switch $i away from PuTTY" 1000
+    }
+    Activate-TestWindow $main2 "PuTTY" | Out-Null
+    Assert-WindowResponsive $main2 "final return from another application"
     [PuttyAiAutomation]::SendMessageText(
         $prompt2, 0x000C, [IntPtr]::Zero,
         "Verify persisted settings") | Out-Null
@@ -1502,6 +1821,16 @@ finally {
     }
     if ($server -and (Get-Process -Id $server.Id -ErrorAction SilentlyContinue)) {
         Stop-Process -Id $server.Id -Force
+    }
+    if ($otherApp -and (Get-Process -Id $otherApp.Id -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $otherApp.Id -Force
+    }
+    if ($hungThread -ne [IntPtr]::Zero) {
+        [PuttyAiAutomation]::ResumeThread($hungThread) | Out-Null
+        [PuttyAiAutomation]::CloseHandle($hungThread) | Out-Null
+    }
+    if ($hungPutty -and (Get-Process -Id $hungPutty.Id -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $hungPutty.Id -Force
     }
 
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree(

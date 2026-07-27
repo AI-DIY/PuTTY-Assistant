@@ -37,7 +37,7 @@
 #define AI_OUTER_FRAME_WIDTH 1
 #define AI_TERMINAL_MIN_WIDTH 120
 #define AI_CONTEXT_DEFAULT 12000
-#define AI_CONTEXT_MAX 64000
+#define AI_CONTEXT_MAX 1000000
 #define AI_HISTORY_MAX_MESSAGES 32
 #define AI_REGISTRY_KEY L"Software\\PuTTY AI"
 #define AI_LEGACY_REGISTRY_KEY L"Software\\SimonTatham\\PuTTY\\AI"
@@ -348,7 +348,7 @@ static BOOL CALLBACK enum_session_window(HWND hwnd, LPARAM lParam)
     SessionEnumContext *context = (SessionEnumContext *)lParam;
     AiPanel *panel = context->panel;
     wchar_t title[128];
-    DWORD_PTR text_result;
+    DWORD process_id = 0;
     size_t len;
 
     if (context->count >= AI_MAX_SESSIONS ||
@@ -356,16 +356,21 @@ static BOOL CALLBACK enum_session_window(HWND hwnd, LPARAM lParam)
         !IsWindow(hwnd))
         return TRUE;
 
-    {
+    title[0] = L'\0';
+    GetWindowThreadProcessId(hwnd, &process_id);
+    if (process_id == GetCurrentProcessId()) {
         HWND metadata = GetDlgItem(hwnd, IDC_AI_SESSION_METADATA);
-        title[0] = L'\0';
         if (metadata)
-            SendMessageTimeoutW(
-                metadata, WM_GETTEXT, lenof(title), (LPARAM)title,
-                SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &text_result);
-    }
-    if (!title[0])
+            SendMessageW(
+                metadata, WM_GETTEXT, lenof(title), (LPARAM)title);
+    } else if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) {
+        /* USER caches captions for titled windows. PuTTY itself is a
+         * WS_POPUP with a custom frame, so querying its text cross-process
+         * could still enter the peer UI thread's message loop. */
         GetWindowTextW(hwnd, title, lenof(title));
+    }
+    /* Never synchronously query a control owned by another PuTTY process.
+     * Untitled custom-frame windows use the fallback below. */
     if (!title[0])
         lstrcpynW(title, L"SSH 会话", lenof(title));
     len = wcslen(title);
@@ -3079,7 +3084,7 @@ void ai_panel_layout(AiPanel *panel)
 #define MOVE(control, cx, cy, cw, ch) do {                              \
         if (control) SetWindowPos(                                      \
             control, NULL, cx, cy, cw, ch,                              \
-            SWP_NOZORDER | SWP_NOACTIVATE);                             \
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);             \
     } while (0)
     MOVE(
         panel->background, left, AI_HOST_TABS_HEIGHT,
@@ -3098,18 +3103,21 @@ void ai_panel_layout(AiPanel *panel)
         SetWindowPos(
             panel->minimize, HWND_TOP, frame_controls_left,
             AI_OUTER_FRAME_WIDTH,
-            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
     if (panel->maximize)
         SetWindowPos(
             panel->maximize, HWND_TOP,
             frame_controls_left + frame_button_width, AI_OUTER_FRAME_WIDTH,
-            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
     if (panel->close)
         SetWindowPos(
             panel->close, HWND_TOP,
             frame_controls_left + 2 * frame_button_width,
             AI_OUTER_FRAME_WIDTH,
-            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT, SWP_NOACTIVATE);
+            frame_button_width, AI_HOST_TABS_HEADER_HEIGHT,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
     y = AI_HOST_TABS_HEIGHT + 42;
     MOVE(panel->status, x, y + 1, inner, 22);
     y = AI_HOST_TABS_HEIGHT + 74;
@@ -3151,21 +3159,29 @@ void ai_panel_layout(AiPanel *panel)
     if (client.right > 0 && client.bottom > 0) {
         SetWindowPos(
             panel->outer_top, HWND_TOP, 0, 0, client.right,
-            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE | SWP_NOCOPYBITS);
         SetWindowPos(
             panel->outer_bottom, HWND_TOP, 0,
             client.bottom - AI_OUTER_FRAME_WIDTH, client.right,
-            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+            AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE | SWP_NOCOPYBITS);
         SetWindowPos(
             panel->outer_left, HWND_TOP, 0, AI_OUTER_FRAME_WIDTH,
             AI_OUTER_FRAME_WIDTH,
-            client.bottom - 2 * AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+            client.bottom - 2 * AI_OUTER_FRAME_WIDTH,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
         SetWindowPos(
             panel->outer_right, HWND_TOP,
             client.right - AI_OUTER_FRAME_WIDTH, AI_OUTER_FRAME_WIDTH,
             AI_OUTER_FRAME_WIDTH,
-            client.bottom - 2 * AI_OUTER_FRAME_WIDTH, SWP_NOACTIVATE);
+            client.bottom - 2 * AI_OUTER_FRAME_WIDTH,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS);
     }
+
+    /* Child controls are moved individually above. Repaint the parent and
+     * every child so the old frame locations cannot survive a live resize. */
+    RedrawWindow(
+        panel->wgs->term_hwnd, NULL, NULL,
+        RDW_INVALIDATE | RDW_ALLCHILDREN);
 
 #undef MOVE
 }
