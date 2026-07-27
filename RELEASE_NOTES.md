@@ -1,3 +1,16 @@
+# PuTTY AI v1.0.3
+
+Release date: 2026-07-27
+
+This maintenance release fixes Windows UI responsiveness and repainting regressions and raises the configurable terminal-context limit to 1,000,000 characters.
+
+- Prevents cross-process session metadata queries from blocking PuTTY when switching between applications or when another PuTTY UI thread is unresponsive.
+- Prevents stale frame pixels after resizing from the left, right, top, or bottom edge.
+- Preserves a 1,000,000-character context limit through saving and a later process startup.
+- Adds end-to-end regression coverage for window switching, suspended UI threads, interactive resizing, and settings persistence.
+
+Windows users can download `PuTTY-AI-v1.0.3-windows-x64.zip`, extract it, and run `putty.exe`.
+
 # PuTTY AI v1.0.2
 
 发布日期：2026-07-26
