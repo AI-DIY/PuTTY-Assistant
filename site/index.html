@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="PuTTY AI 是面向 Windows 的 AI 增强型 SSH 客户端。它将终端上下文、日志分析、命令解释与人工确认放入同一个工作台。">
+    <meta name="keywords" content="PuTTY AI, AI SSH 客户端, Windows SSH, 智能终端, 运维助手, 日志分析, Linux 命令">
+    <meta name="author" content="PuTTY AI contributors">
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+    <meta name="theme-color" content="#10211c">
+    <link rel="canonical" href="https://ai.jiaolian.help/">
+    <link rel="stylesheet" href="styles.css">
+    <title>PuTTY AI | 面向 Windows 的 AI SSH 终端</title>
+
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="PuTTY AI">
+    <meta property="og:title" content="PuTTY AI | 面向 Windows 的 AI SSH 终端">
+    <meta property="og:description" content="将终端上下文、日志分析、命令解释与人工确认放入同一个 Windows SSH 工作台。">
+    <meta property="og:url" content="https://ai.jiaolian.help/">
+    <meta property="og:image" content="https://ai.jiaolian.help/assets/putty-ai-interface.png">
+    <meta property="og:image:alt" content="PuTTY AI 的 Windows SSH 终端与 AI 侧边栏界面">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="PuTTY AI | 面向 Windows 的 AI SSH 终端">
+    <meta name="twitter:description" content="在熟悉的 Windows SSH 工作流中获得可复核的 AI 协助。">
+    <meta name="twitter:image" content="https://ai.jiaolian.help/assets/putty-ai-interface.png">
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "PuTTY AI",
+        "description": "面向 Windows 的 AI 增强型 SSH 客户端，将终端上下文、日志分析、命令解释与人工确认集中在同一个工作台。",
+        "url": "https://ai.jiaolian.help/",
+        "downloadUrl": "https://ai.jiaolian.help/downloads/PuTTY-AI-v1.0.4-windows-x64.zip",
+        "image": "https://ai.jiaolian.help/assets/putty-ai-interface.png",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "SSH client",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareVersion": "1.0.4",
+        "license": "https://opensource.org/license/mit",
+        "isAccessibleForFree": true,
+        "sameAs": "https://github.com/AI-DIY/PuTTY-AI",
+        "featureList": [
+          "可选且脱敏的终端上下文",
+          "日志分析与自然语言问答",
+          "OpenAI Chat Completions 兼容接口",
+          "候选命令回填与高风险二次确认",
+          "按主机隔离的多轮会话"
+        ]
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "PuTTY AI 是什么？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "PuTTY AI 是在 PuTTY 0.84 源码基础上开发的 Windows AI 增强型 SSH 客户端。它将日志分析、命令解释和人工确认整合到终端旁边。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "终端内容会默认发送给模型吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "不会。终端上下文默认关闭；用户手动启用后，客户端会先尽力对密码、令牌、授权头和私钥等信息进行脱敏。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "AI 生成的命令会自动执行吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "不会。候选命令需要用户确认后才会回填到终端，且不会自动发送 Enter。删除、格式化、停服和改权限等高风险命令还需要二次确认。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "PuTTY AI 与 PuTTY 或 OpenAI 有官方关系吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "没有。PuTTY AI 由独立开发者维护；PuTTY、OpenAI 和其他第三方名称仅用于说明兼容性、来源和许可证归属。"
+            }
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <header class="site-header">
+      <div class="container site-header__inner">
+        <a class="brand" href="#top" aria-label="PuTTY AI 首页">
+          <span class="brand__mark" aria-hidden="true">&gt;_</span>
+          <span>PuTTY AI</span>
+        </a>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="#features">能力</a>
+          <a href="#security">安全</a>
+          <a href="#download">下载</a>
+          <a href="#faq">常见问题</a>
+        </nav>
+        <a class="header-source" href="https://github.com/AI-DIY/PuTTY-AI" rel="noopener noreferrer">查看源码</a>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="container hero__grid">
+          <div class="hero__copy">
+            <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Windows 10/11 · x64 · v1.0.4</p>
+            <h1 id="hero-title">PuTTY AI</h1>
+            <p class="hero__statement">让 SSH 终端听懂自然语言。</p>
+            <p class="hero__lead">在熟悉的 PuTTY 工作流中，直接分析日志、解释命令、定位故障，并在人工复核后把建议回填到终端。</p>
+            <div class="hero__actions">
+              <a class="button button--primary" href="downloads/PuTTY-AI-v1.0.4-windows-x64.zip" download>下载 Windows 版</a>
+              <a class="button button--secondary" href="#overview">了解产品</a>
+            </div>
+            <div class="release-meta" aria-label="当前发布信息">
+              <span>当前发布：2026-07-27</span>
+              <span>SHA-256：ff1caa4a...3f0bc64b</span>
+            </div>
+          </div>
+          <figure class="product-shot">
+            <div class="product-shot__bar" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <b>PuTTY AI · SSH workspace</b>
+            </div>
+            <img src="assets/putty-ai-interface.png" width="1096" height="490" alt="PuTTY AI 同时显示 SSH 终端和 AI 会话侧边栏的真实界面截图">
+            <figcaption>原生 Windows SSH 终端与 AI 侧边栏</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="overview" id="overview" aria-labelledby="overview-title">
+        <div class="container overview__grid">
+          <div>
+            <p class="section-label">为真实工作流而设计</p>
+            <h2 id="overview-title">少一次复制粘贴，多一层可控判断</h2>
+          </div>
+          <div class="overview__body">
+            <p>开发、运维和技术支持人员经常需要在 SSH 终端、搜索结果和 AI 工具之间来回切换。PuTTY AI 将这些工作重新收拢到同一扇窗口：保留熟悉的终端操作方式，同时在需要时提供有上下文的分析。</p>
+            <p>它面向需要理解系统状态、排查异常或学习 Linux 命令的人。AI 可以给出建议，但执行权始终保留在操作者手中。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section--paper" id="features" aria-labelledby="features-title">
+        <div class="container">
+          <div class="section-heading">
+            <p class="section-label">核心能力</p>
+            <h2 id="features-title">终端旁边，是一个知道边界的 AI 助手</h2>
+          </div>
+          <div class="feature-grid">
+            <article class="feature">
+              <p class="feature__index">01</p>
+              <h3>基于上下文的问题分析</h3>
+              <p>终端上下文默认不发送。手动启用后，客户端会先尽力脱敏密码、令牌、授权头和私钥等信息。</p>
+            </article>
+            <article class="feature feature--teal">
+              <p class="feature__index">02</p>
+              <h3>日志与故障排查</h3>
+              <p>用自然语言描述现象，结合终端输出梳理异常线索，并得到可逐步验证的排查建议。</p>
+            </article>
+            <article class="feature feature--blue">
+              <p class="feature__index">03</p>
+              <h3>流式中文多轮会话</h3>
+              <p>支持 OpenAI Chat Completions 兼容接口。回复以流式方式出现，按主机隔离的对话可继续追问。</p>
+            </article>
+            <article class="feature feature--orange">
+              <p class="feature__index">04</p>
+              <h3>命令回填，而非代替操作</h3>
+              <p>候选命令先解释用途与影响，再由用户确认回填。高风险命令额外需要二次确认，且不会自动发送 Enter。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section workflow" aria-labelledby="workflow-title">
+        <div class="container workflow__grid">
+          <div class="workflow__intro">
+            <p class="section-label">工作方式</p>
+            <h2 id="workflow-title">从终端信息到可复核的建议</h2>
+            <p>PuTTY AI 不替代操作人员。它把问题、上下文、分析与确认连接起来，让每一个关键动作都有停下来判断的机会。</p>
+          </div>
+          <ol class="workflow__steps">
+            <li>
+              <span>1</span>
+              <div><h3>用自然语言描述问题</h3><p>询问报错原因、系统状态、排查思路或命令用法。</p></div>
+            </li>
+            <li>
+              <span>2</span>
+              <div><h3>按需附带已脱敏的终端上下文</h3><p>上下文选择权在用户手中，默认不会发送当前会话内容。</p></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><h3>阅读流式分析与操作建议</h3><p>模型可以返回解释、排查步骤或候选命令，不强制每次输出命令。</p></div>
+            </li>
+            <li>
+              <span>4</span>
+              <div><h3>确认后回填到终端</h3><p>只将命令放入输入区域；发送与否仍由操作者决定。</p></div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section section--dark" id="security" aria-labelledby="security-title">
+        <div class="container security__grid">
+          <div>
+            <p class="section-label section-label--light">隐私与安全</p>
+            <h2 id="security-title">先控制上下文，再请求模型</h2>
+          </div>
+          <div class="security__body">
+            <p>对于远程系统操作，速度很重要，边界同样重要。PuTTY AI 将发送终端上下文、持久化模型配置和执行候选命令的决策留给用户。</p>
+            <ul class="check-list">
+              <li>终端上下文默认关闭，启用前由用户主动决定。</li>
+              <li>持久化 API Key 通过 Windows DPAPI 按当前用户加密。</li>
+              <li>审计日志不记录问题、回复、终端上下文、命令正文或 API Key。</li>
+              <li>删除、格式化、停服和改权限等高风险命令需要二次确认。</li>
+            </ul>
+            <p class="security__note">AI 输出仍可能出错。请在执行任何生成命令前人工复核，避免将本工具直接用于无人值守生产操作。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section use-cases" aria-labelledby="use-cases-title">
+        <div class="container">
+          <div class="section-heading section-heading--split">
+            <div>
+              <p class="section-label">适用场景</p>
+              <h2 id="use-cases-title">为每天都在终端里工作的你</h2>
+            </div>
+            <p>适用于开发工程师、运维工程师、测试人员、技术支持人员，以及正在学习 Linux 和 SSH 的用户。</p>
+          </div>
+          <div class="use-case-list" role="list">
+            <div role="listitem"><strong>故障排查</strong><span>这个服务为什么启动失败？</span></div>
+            <div role="listitem"><strong>日志分析</strong><span>帮我总结这段日志里的关键异常。</span></div>
+            <div role="listitem"><strong>系统检查</strong><span>找出占用磁盘空间最大的目录。</span></div>
+            <div role="listitem"><strong>命令学习</strong><span>解释这条命令每个参数的作用。</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="download" id="download" aria-labelledby="download-title">
+        <div class="container download__inner">
+          <div>
+            <p class="section-label">Windows 发行版</p>
+            <h2 id="download-title">从一个熟悉的终端开始</h2>
+            <p>下载 v1.0.4 的 Windows x64 压缩包，解压后直接运行 <code>putty.exe</code>。</p>
+          </div>
+          <div class="download__actions">
+            <a class="button button--primary button--dark" href="downloads/PuTTY-AI-v1.0.4-windows-x64.zip" download>下载 PuTTY AI v1.0.4</a>
+            <a class="download__checksum" href="downloads/SHA256SUMS.txt" download>下载 SHA-256 校验文件</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section faq" id="faq" aria-labelledby="faq-title">
+        <div class="container faq__grid">
+          <div>
+            <p class="section-label">常见问题</p>
+            <h2 id="faq-title">使用前需要知道的事</h2>
+          </div>
+          <div class="faq__list">
+            <details open>
+              <summary>PuTTY AI 是什么？</summary>
+              <p>PuTTY AI 是在 PuTTY 0.84 源码基础上开发的 Windows AI 增强型 SSH 客户端。它将日志分析、命令解释和人工确认整合到终端旁边。</p>
+            </details>
+            <details>
+              <summary>它会默认发送我的终端内容吗？</summary>
+              <p>不会。终端上下文默认关闭；用户手动启用后，客户端会先尽力对密码、令牌、授权头和私钥等信息进行脱敏。</p>
+            </details>
+            <details>
+              <summary>AI 会自动执行生成的命令吗？</summary>
+              <p>不会。候选命令需要用户确认后才会回填到终端，且不会自动发送 Enter。高风险命令还需要二次确认。</p>
+            </details>
+            <details>
+              <summary>这是 PuTTY 或 OpenAI 的官方产品吗？</summary>
+              <p>不是。PuTTY AI 由独立开发者维护；PuTTY、OpenAI 和其他第三方名称仅用于说明兼容性、来源和许可证归属。</p>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container site-footer__grid">
+        <div>
+          <a class="brand brand--footer" href="#top"><span class="brand__mark" aria-hidden="true">&gt;_</span><span>PuTTY AI</span></a>
+          <p>由独立开发者维护的 AI 增强型 SSH 客户端。</p>
+        </div>
+        <div class="site-footer__links">
+          <a href="https://github.com/AI-DIY/PuTTY-AI" rel="noopener noreferrer">GitHub 源码</a>
+          <a href="downloads/PuTTY-AI-v1.0.4-windows-x64.zip" download>Windows 下载</a>
+          <a href="downloads/SHA256SUMS.txt" download>SHA-256 校验</a>
+        </div>
+      </div>
+      <div class="container site-footer__legal">
+        <p>PuTTY AI 不隶属于 PuTTY、OpenAI、任何模型服务商或堡垒机产品供应商。第三方名称仅用于说明兼容性和许可证归属。</p>
+        <p>Copyright 2026 PuTTY AI contributors · MIT License</p>
+      </div>
+    </footer>
+  </body>
+</html>

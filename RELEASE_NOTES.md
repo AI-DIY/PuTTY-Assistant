@@ -1,3 +1,15 @@
+# PuTTY AI v1.0.4
+
+Release date: 2026-07-27
+
+This release packages the current Windows client as v1.0.4 after completing the full release regression suite.
+
+- Updates the executable version and Windows x64 distribution to v1.0.4.
+- Adds a reviewed global functional test matrix and release-site consistency check.
+- Verifies standalone C tests, Unicode normalization vectors, normal and high-risk UI flows, and a public SSH handshake before publication.
+
+Windows users can download `PuTTY-AI-v1.0.4-windows-x64.zip`, extract it, and run `putty.exe`.
+
 # PuTTY AI v1.0.3
 
 Release date: 2026-07-27

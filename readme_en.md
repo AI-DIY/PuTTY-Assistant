@@ -9,12 +9,12 @@ An AI-enhanced SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~s
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
 ![Language](https://img.shields.io/badge/language-C-A8B9CC?style=flat-square)
-![Version](https://img.shields.io/badge/version-v1.0.3-success?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.0.4-success?style=flat-square)
 
 </div>
 
 > [!IMPORTANT]
-> `v1.0.3` has completed the current bug-fix, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
+> `v1.0.4` has completed the current bug-fix, optimization, and regression-test cycle. The Windows client integrates an AI sidebar, optional terminal context, compatible model endpoints, command confirmation, and safety controls. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
 
 This is an independently maintained project. It is not affiliated with, authorized by, sponsored by, or endorsed by PuTTY, OpenAI, any model provider, or any bastion-client vendor. Third-party names are used only to describe compatibility and license attribution; all related rights belong to their respective owners.
 
@@ -154,7 +154,7 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 Remote verification connects to `ssh.github.com:443` by default, disables Pageant and connection sharing, and verifies only host-key negotiation and the server entering the `publickey` authentication stage. Without credentials, `No supported authentication methods available (server sent: publickey)` is an expected result: it means the SSH connection and handshake successfully reached authentication.
 
-The packaged artifact is `package/PuTTY-AI-v1.0.3-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
+The packaged artifact is `package/PuTTY-AI-v1.0.4-windows-x64.zip`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
 
 ## Development Plan
 
