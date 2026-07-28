@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://ai.jiaolian.help/sitemap.xml
+Sitemap: http://ai.jiaolian.help/putty-ai/sitemap.xml
