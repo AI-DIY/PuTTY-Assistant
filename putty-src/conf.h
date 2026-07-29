@@ -819,12 +819,18 @@ CONF_OPTION(win_name_always,
 )
 CONF_OPTION(width,
     VALUE_TYPE(INT),
-    DEFAULT_INT(80),
+    /*
+     * PuTTY AI reserves a persistent right-hand panel, so the classic
+     * 80-column terminal default leaves the first window visually too
+     * compressed. 104 by 36 gives the terminal and assistant balanced
+     * working space without overwhelming a typical laptop display.
+     */
+    DEFAULT_INT(104),
     SAVE_KEYWORD("TermWidth"),
 )
 CONF_OPTION(height,
     VALUE_TYPE(INT),
-    DEFAULT_INT(24),
+    DEFAULT_INT(36),
     SAVE_KEYWORD("TermHeight"),
 )
 CONF_OPTION(font,

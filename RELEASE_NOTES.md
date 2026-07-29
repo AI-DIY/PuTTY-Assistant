@@ -1,3 +1,19 @@
+# PuTTY AI v1.0.5
+
+Release date: 2026-07-29
+
+This maintenance release improves the first-launch workspace proportions for
+the native Windows client.
+
+- Expands the default terminal grid from 80x24 to 104x36, giving the terminal
+  and persistent AI panel a more balanced initial canvas.
+- Keeps existing saved sessions unchanged: their configured terminal dimensions
+  continue to take precedence.
+- Updates the executable version and Windows x64 distribution to v1.0.5.
+
+Windows users can download `PuTTY-AI-v1.0.5-windows-x64.zip`, extract it, and
+run `putty.exe`.
+
 # PuTTY AI v1.0.4
 
 Release date: 2026-07-27

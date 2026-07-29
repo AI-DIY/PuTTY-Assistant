@@ -1,1 +1,1 @@
-ff1caa4a7e253e6a84b8cdf2e2d79a03bb1b1eae89b3d16653d3dfe53f0bc64b *PuTTY-AI-v1.0.4-windows-x64.zip
+f907a2b009dc38efd9ddfbd33500542aa860cdeaef41c2c8a8ae6add7d6ffeed *PuTTY-AI-v1.0.5-windows-x64.zip
