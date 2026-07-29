@@ -1,3 +1,21 @@
+# PuTTY AI v1.0.6
+
+Release date: 2026-07-29
+
+This maintenance release makes the initial window geometry visible for both
+new and previously saved PuTTY sessions.
+
+- Sizes the first window from the active monitor's working area (68% wide by
+  62% high), producing a balanced terminal-and-AI workspace on modern screens.
+- Prevents a saved classic 80x24 terminal grid from recreating the cramped
+  first-window proportions seen in v1.0.5.
+- Preserves the classic terminal-grid defaults; the larger initial workspace is
+  now controlled directly by window layout rather than terminal configuration.
+- Updates the executable version and Windows x64 distribution to v1.0.6.
+
+Windows users can download `PuTTY-AI-v1.0.6-windows-x64.zip`, extract it, and
+run `putty.exe`.
+
 # PuTTY AI v1.0.5
 
 Release date: 2026-07-29

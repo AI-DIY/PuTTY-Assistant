@@ -145,6 +145,12 @@ DECL_WINDOWS_FUNCTION(static, HRESULT, DwmSetWindowAttribute,
 #define PUTTY_DWMWA_BORDER_COLOR 34
 #define PUTTY_DWMWA_COLOR_NONE 0xFFFFFFFE
 
+/* A first-run workspace should be large enough to balance the terminal and
+ * persistent AI panel, rather than inheriting the compact 80x24 terminal
+ * silhouette. */
+#define PUTTY_AI_INITIAL_WINDOW_WIDTH_PERCENT 68
+#define PUTTY_AI_INITIAL_WINDOW_HEIGHT_PERCENT 62
+
 static UINT wm_mousewheel = WM_MOUSEWHEEL;
 
 struct WinGuiSeatListNode wgslisthead = {
@@ -700,8 +706,31 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         /* Adjust them if necessary */
         RECT war;
         if (get_workingarea_rect(wgs, &war)) {
-            x = war.left + ((war.right - war.left) - guess_width) / 2;
-            y = war.top + ((war.bottom - war.top) - guess_height) / 2;
+            int work_width = war.right - war.left;
+            int work_height = war.bottom - war.top;
+            int preferred_width =
+                work_width * PUTTY_AI_INITIAL_WINDOW_WIDTH_PERCENT / 100;
+            int preferred_height =
+                work_height * PUTTY_AI_INITIAL_WINDOW_HEIGHT_PERCENT / 100;
+
+            /*
+             * Saved sessions commonly retain a classic 80x24 terminal grid.
+             * Use the monitor's working area for the first visible canvas so
+             * that grid cannot make the AI-enhanced interface look cramped.
+             * Never reduce a deliberately larger session window, and always
+             * stay inside the current monitor's usable bounds.
+             */
+            if (guess_width < preferred_width)
+                guess_width = preferred_width;
+            if (guess_height < preferred_height)
+                guess_height = preferred_height;
+            if (guess_width > work_width)
+                guess_width = work_width;
+            if (guess_height > work_height)
+                guess_height = work_height;
+
+            x = war.left + (work_width - guess_width) / 2;
+            y = war.top + (work_height - guess_height) / 2;
             if (x + guess_width > war.right)
                 x = war.right - guess_width;
             if (x < war.left)

@@ -708,6 +708,17 @@ try {
         [Math]::Abs($windowCentreY - $workCentreY) -gt 48) {
         throw "The initial PuTTY window was not centred in the working area"
     }
+    $windowWidth = $mainRect.right - $mainRect.left
+    $windowHeight = $mainRect.bottom - $mainRect.top
+    $workWidth = $monitorInfo.rcWork.right - $monitorInfo.rcWork.left
+    $workHeight = $monitorInfo.rcWork.bottom - $monitorInfo.rcWork.top
+    $minimumInitialWidth = [Math]::Floor($workWidth * 0.68) - 4
+    $minimumInitialHeight = [Math]::Floor($workHeight * 0.62) - 4
+    if ($windowWidth -lt $minimumInitialWidth -or
+        $windowHeight -lt $minimumInitialHeight) {
+        throw "The initial PuTTY AI workspace was smaller than the " +
+            "configured monitor-relative layout"
+    }
 
     $endpoint = $model = $key = $transcript = $prompt = $ask = $context =
         $clear = $apply = $background = $title = $hostTabs =
