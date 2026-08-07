@@ -4,7 +4,7 @@
 
 ### An AI assistant beside your SSH terminal
 
-A Windows SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) with an optional AI assistant panel. It helps users understand terminal output, explain commands, and organize troubleshooting ideas without taking control of the session.
+A Windows SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) with an on-demand AI assistant. It helps users understand terminal output, explain commands, organize troubleshooting ideas, and review candidate commands before filling them into the terminal.
 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
@@ -14,23 +14,31 @@ A Windows SSH client based on [PuTTY](https://www.chiark.greenend.org.uk/~sgtath
 </div>
 
 > [!IMPORTANT]
-> `v1.0.6` sizes the first window directly from the active monitor's working area (68% wide by 62% high), so saved 80x24 terminal grids no longer produce a cramped terminal-and-AI workspace. The current release is an on-demand AI assistant: it can answer questions, explain output, and suggest candidate commands, but it does not autonomously plan tasks, run tools continuously, or replace operator review. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
+> `v1.0.6` sizes the first window directly from the active monitor's working area (68% wide by 62% high), so saved 80x24 terminal grids no longer produce a cramped terminal-and-AI workspace. Treat this release as an on-demand AI assistant: it answers user questions, explains output, and suggests candidate commands, but it does not autonomously plan tasks, operate continuously, or make decisions for the operator. AI output may still be incorrect. Always review generated commands manually before executing them; direct use in unattended production operations is not recommended.
 
 This is an independently maintained project. It is not affiliated with, authorized by, sponsored by, or endorsed by PuTTY, OpenAI, any model provider, or any bastion-client vendor. Third-party names are used only to describe compatibility and license attribution; all related rights belong to their respective owners.
 
-## Positioning and Roadmap
+## What This Is
 
-This project was renamed from **PuTTY AI** to **PuTTY-Assistant**. It is intentionally scoped as an AI assistant: the user asks a question, the model returns an explanation or suggestion, and the user decides what to do next. It is not a copilot or an autonomous agent.
+PuTTY-Assistant is an AI assistant beside the SSH terminal. It does not take over the terminal or complete tasks for the user. The user asks a question, optionally provides processed terminal context, the model returns an explanation or suggestion, and the user decides whether to fill or execute anything.
+
+## Explicit Boundaries
+
+- It is not a copilot and does not proactively observe or advance a task.
+- It is not an agent; it does not autonomously call tools, run commands continuously, or manage remote hosts.
+- It never presses Enter automatically for a generated command. High-risk operations remain user-confirmed.
 
 More autonomous task planning and tool use may be explored later in a separate project named **Terminal-Agent**. Those capabilities are not part of this repository's current scope.
 
-The current maintenance entry point is this repository: [AI-DIY/PuTTY-Assistant](https://github.com/AI-DIY/PuTTY-Assistant). Legacy pages, package names, and search results should point here.
+The current maintenance entry point is this repository: [AI-DIY/PuTTY-Assistant](https://github.com/AI-DIY/PuTTY-Assistant).
 
-## Overview
+## How It Works
 
 Developers, operations engineers, and technical support staff often switch repeatedly between an SSH terminal, search engines, and AI tools: copy an error, add context, generate a command, then paste it back into the terminal. This workflow affects efficiency and makes it easy to miss important information or execute the wrong command.
 
-PuTTY-Assistant adds an optional AI assistant panel while preserving the familiar PuTTY workflow. Users can describe a problem in natural language and ask the model to analyze logs, explain commands, identify troubleshooting clues, and draft operational suggestions.
+The workflow is deliberately small: ask a question, optionally attach terminal context, read the model's response, and decide what to do. Terminal context is disabled by default, and candidate commands are only filled into the terminal after confirmation.
+
+Typical uses include explaining errors, reading logs, learning commands, organizing troubleshooting steps, and filling a reviewed candidate command into the terminal.
 
 ## Features
 
@@ -136,7 +144,7 @@ $env:OPENAI_API_KEY = "your-api-key"
 
 ### Auditing
 
-- By default, the program records metadata-only audit logs that exclude questions, replies, context, command bodies, and API keys. The log is stored at `%LOCALAPPDATA%\PuTTY AI\audit.log`; this directory name is retained for compatibility with existing installations. The log contains only information such as timestamps, event types, the model endpoint host, and risk levels.
+- By default, the program records metadata-only audit logs that exclude questions, replies, context, command bodies, and API keys. The log is written to `audit.log` under the current user's local application-data directory and contains only information such as timestamps, event types, the model endpoint host, and risk levels.
 
 ## Testing and Verification
 
@@ -162,9 +170,9 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 Remote verification connects to `ssh.github.com:443` by default, disables Pageant and connection sharing, and verifies only host-key negotiation and the server entering the `publickey` authentication stage. Without credentials, `No supported authentication methods available (server sent: publickey)` is an expected result: it means the SSH connection and handshake successfully reached authentication.
 
-The current package keeps the historical filename `package/PuTTY-AI-v1.0.6-windows-x64.zip` so existing download links continue to work. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
+The Windows release package is placed under `package/`. It contains `putty.exe`, the application-local VC Runtime, project and PuTTY licenses, third-party notices, and release notes.
 
-## Current Assistant Work
+## Current AI Assistant Work
 
 - [x] Import PuTTY 0.84 source code
 - [x] Define the AI assistant scope and the core interaction flow
@@ -207,7 +215,7 @@ The current release provides context-scope controls, sensitive-information redac
 
 ## Contributing
 
-Please use Issues to submit use cases, feature suggestions, and bug reports. Contributions are also welcome in areas such as the AI panel, model integration, safety policies, and documentation.
+Please use Issues to submit use cases, feature suggestions, and bug reports. Contributions are also welcome in areas such as the AI assistant panel, model integration, safety policies, and documentation.
 
 Before submitting code, keep the scope of your changes clear and include the necessary build or test information.
 
