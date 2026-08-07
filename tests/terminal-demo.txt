@@ -1,4 +1,4 @@
-Welcome to PuTTY AI integration test
+Welcome to PuTTY-Assistant integration test
 
 $ systemctl status demo-service
 demo-service.service - Demo Service

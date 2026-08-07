@@ -1,5 +1,5 @@
 /*
- * ai.c: native Win32 AI assistant panel for PuTTY AI.
+ * ai.c: native Win32 AI assistant panel for PuTTY-Assistant.
  *
  * This module deliberately uses only APIs shipped with Windows. HTTP is
  * provided by WinHTTP, and the UI is made from standard controls plus the
@@ -39,6 +39,7 @@
 #define AI_CONTEXT_DEFAULT 12000
 #define AI_CONTEXT_MAX 1000000
 #define AI_HISTORY_MAX_MESSAGES 32
+/* Keep the historical key so existing installations retain their settings. */
 #define AI_REGISTRY_KEY L"Software\\PuTTY AI"
 #define AI_LEGACY_REGISTRY_KEY L"Software\\SimonTatham\\PuTTY\\AI"
 #define AI_SESSION_TIMER_ID 0x71A0
@@ -977,7 +978,7 @@ static bool registry_save_protected_string(
     encrypted.cbData = 0;
     encrypted.pbData = NULL;
     if (!CryptProtectData(
-            &input, L"PuTTY AI setting", NULL, NULL, NULL,
+            &input, L"PuTTY-Assistant setting", NULL, NULL, NULL,
             CRYPTPROTECT_UI_FORBIDDEN, &encrypted))
         return false;
 
@@ -1239,7 +1240,7 @@ static const wchar_t *message_label(AiMessageKind kind)
       case AI_MESSAGE_USER: return L"你";
       case AI_MESSAGE_ASSISTANT: return L"AI 助手";
       case AI_MESSAGE_ERROR: return L"错误";
-      default: return L"PuTTY AI";
+      default: return L"AI 助手";
     }
 }
 
@@ -2244,7 +2245,7 @@ static char *perform_request(const AiRequest *request, bool *ok)
     }
 
     session = WinHttpOpen(
-        L"PuTTY AI/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        L"PuTTY-Assistant/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
         error = winhttp_error_text("初始化 HTTP 会话");
@@ -2658,9 +2659,9 @@ static void apply_candidate(AiPanel *panel)
 
     message = dupwcs(
         L"是否将此命令填入终端？\n\n"
-        L"PuTTY AI 不会自动按回车。执行前请在终端中再次检查命令。");
+        L"PuTTY-Assistant 不会自动按回车。执行前请在终端中再次检查命令。");
     answer = MessageBoxW(
-        panel->wgs->term_hwnd, message, L"PuTTY AI 命令确认",
+        panel->wgs->term_hwnd, message, L"PuTTY-Assistant 命令确认",
         MB_YESNO | (panel->candidate_dangerous ? MB_ICONWARNING :
                                                    MB_ICONQUESTION) |
         MB_DEFBUTTON2);
@@ -2875,7 +2876,7 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
         IDC_AI_SESSION_METADATA);
     ShowWindow(panel->session_metadata, SW_HIDE);
     panel->title = make_control(
-        panel, 0, L"STATIC", L"PuTTY AI", SS_LEFT, IDC_AI_TITLE);
+        panel, 0, L"STATIC", L"PuTTY-Assistant", SS_LEFT, IDC_AI_TITLE);
     SendMessageW(panel->title, WM_SETFONT, (WPARAM)panel->title_font, TRUE);
     panel->status = make_control(
         panel, 0, L"STATIC", L"准备就绪", SS_LEFT | SS_NOPREFIX,
@@ -2959,7 +2960,7 @@ AiPanel *ai_panel_create(WinGuiSeat *wgs)
         panel, 0, L"BUTTON", L"永久保存", BS_PUSHBUTTON, IDC_AI_SAVE);
     panel->privacy = make_control(
         panel, 0, L"STATIC",
-        L"上下文会尽力脱敏；审计日志位于 %LOCALAPPDATA%\\PuTTY AI。",
+        L"上下文会尽力脱敏；审计日志位于兼容路径 %LOCALAPPDATA%\\PuTTY AI。",
         SS_LEFT | SS_NOPREFIX, IDC_AI_PRIVACY);
 
     load_initial_settings(panel);

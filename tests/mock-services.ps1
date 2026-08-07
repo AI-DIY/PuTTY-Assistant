@@ -193,7 +193,7 @@ public static class PuttyAiMockServices
         using (NetworkStream stream = client.GetStream())
         {
             byte[] greeting = Encoding.UTF8.GetBytes(
-                "PuTTY AI mock remote service ready\r\n$ ");
+                "PuTTY-Assistant mock remote service ready\r\n$ ");
             stream.Write(greeting, 0, greeting.Length);
             stream.Flush();
             stream.ReadTimeout = 60000;

@@ -12,7 +12,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $releaseNotesPath = Join-Path $Root "RELEASE_NOTES.md"
 $releaseNotes = Get-Content -Raw -Encoding UTF8 $releaseNotesPath
-if ($releaseNotes -notmatch '(?m)^# PuTTY AI v(?<version>\d+\.\d+\.\d+)\s*$') {
+if ($releaseNotes -notmatch '(?m)^# PuTTY-Assistant v(?<version>\d+\.\d+\.\d+)\s*$') {
     throw "Could not determine the current release version from RELEASE_NOTES.md"
 }
 $version = $Matches.version

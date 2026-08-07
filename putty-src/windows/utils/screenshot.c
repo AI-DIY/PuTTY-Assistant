@@ -29,7 +29,7 @@ char *save_screenshot(HWND hwnd, Filename *outfile)
     int x, y, w, h;
     RECT wr;
 
-    /* PuTTY AI uses a client-drawn frameless window. DWM can retain the
+    /* PuTTY-Assistant uses a client-drawn frameless window. DWM can retain the
      * pre-resize extended bounds for that window, so prefer its live window
      * rectangle. Framed builds still use the DWM bounds to exclude shadow. */
     LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-PuTTY AI is an independently maintained project. The third-party names below
+PuTTY-Assistant is an independently maintained project. The third-party names below
 identify incorporated software or runtime dependencies only. Their inclusion
 does not imply affiliation, authorization, sponsorship, or endorsement.
 

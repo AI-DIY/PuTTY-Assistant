@@ -1,5 +1,5 @@
 /*
- * Native Windows AI side panel for PuTTY AI.
+ * Native Windows AI side panel for PuTTY-Assistant.
  */
 
 #ifndef PUTTY_WINDOWS_AI_H

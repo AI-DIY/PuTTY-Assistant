@@ -86,7 +86,7 @@ try {
             $_.Title -like "*Security Alert*"
         } | Select-Object -First 1
         if (-not (Get-Process -Id $putty.Id -ErrorAction SilentlyContinue)) {
-            throw "PuTTY AI exited before SSH negotiation completed"
+            throw "PuTTY-Assistant exited before SSH negotiation completed"
         }
     }
 

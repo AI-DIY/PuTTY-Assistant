@@ -1,4 +1,6 @@
-# PuTTY AI v1.0.6
+# PuTTY-Assistant v1.0.6
+
+项目已从旧名称 `PuTTY AI` 更名为 `PuTTY-Assistant`。历史压缩包文件名暂时保留 `PuTTY-AI-...`，以兼容已有下载链接。
 
 Release date: 2026-07-29
 
@@ -16,7 +18,7 @@ new and previously saved PuTTY sessions.
 Windows users can download `PuTTY-AI-v1.0.6-windows-x64.zip`, extract it, and
 run `putty.exe`.
 
-# PuTTY AI v1.0.5
+# PuTTY-Assistant v1.0.5
 
 Release date: 2026-07-29
 
@@ -32,7 +34,7 @@ the native Windows client.
 Windows users can download `PuTTY-AI-v1.0.5-windows-x64.zip`, extract it, and
 run `putty.exe`.
 
-# PuTTY AI v1.0.4
+# PuTTY-Assistant v1.0.4
 
 Release date: 2026-07-27
 
@@ -44,7 +46,7 @@ This release packages the current Windows client as v1.0.4 after completing the 
 
 Windows users can download `PuTTY-AI-v1.0.4-windows-x64.zip`, extract it, and run `putty.exe`.
 
-# PuTTY AI v1.0.3
+# PuTTY-Assistant v1.0.3
 
 Release date: 2026-07-27
 
@@ -57,7 +59,7 @@ This maintenance release fixes Windows UI responsiveness and repainting regressi
 
 Windows users can download `PuTTY-AI-v1.0.3-windows-x64.zip`, extract it, and run `putty.exe`.
 
-# PuTTY AI v1.0.2
+# PuTTY-Assistant v1.0.2
 
 发布日期：2026-07-26
 
@@ -73,7 +75,7 @@ Windows users can download `PuTTY-AI-v1.0.3-windows-x64.zip`, extract it, and ru
 - 支持自动化启动、UTF-8 临时配置文件和连接保活。
 - 按设计实现无原生标题栏界面、贯穿整窗的 44/46 像素双层主机栏、冷灰色 440 像素 AI 面板，以及黑色全局栏中的最小化、最大化/还原和关闭按钮。
 - 顶部主机标签可在多个 PuTTY 进程之间切换，每个主机保留独立的 AI 多轮会话。
-- 全局最小化、最大化/还原和关闭会同步作用于所有运行中的 PuTTY AI 会话，关闭时保留每个会话原有的确认保护。
+- 全局最小化、最大化/还原和关闭会同步作用于所有运行中的 PuTTY 会话，关闭时保留每个会话原有的确认保护。
 - 主机信息栏会显示已配置或 SSH `login as:` 提示中实际输入的登录用户；无法可靠获取时自动隐藏用户项和会话标签占位符。
 - 终端上下文改为输入区下方的切换按钮；会话历史始终在当前主机内保留且不再显示保存选项；清空对话使用独立按钮。
 - 候选命令改为代码块悬浮“填入终端”，危险命令显示“检查并填入”。

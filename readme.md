@@ -1,11 +1,10 @@
 <div align="center">
 
-# PuTTY AI
+# PuTTY-Assistant
 
-### 让 SSH 终端听懂自然语言
+### 放在 SSH 终端旁边的 AI 助手
 
-基于 [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) 的 AI 增强型 SSH 客户端，  
-把终端上下文、故障分析、命令生成与执行确认集中在同一个窗口中。
+基于 [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) 的 Windows SSH 客户端增量版本，提供一个可选的 AI 对话面板，帮助用户理解终端内容、解释命令和整理排查思路。
 
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
 ![PuTTY](https://img.shields.io/badge/PuTTY-0.84-5C2D91?style=flat-square)
@@ -15,15 +14,23 @@
 </div>
 
 > [!IMPORTANT]
-> `v1.0.6` 直接按当前显示器的工作区设置首次窗口大小（68% 宽、62% 高），不再受已保存会话中 80×24 终端网格的限制，使终端与 AI 侧边栏拥有稳定、均衡的初始空间。Windows 客户端已集成 AI 侧边栏、可选终端上下文、兼容模型接口、命令确认与安全控制。AI 输出仍可能出错，执行任何生成命令前必须人工复核，暂不建议直接用于无人值守生产操作。
+> `v1.0.6` 直接按当前显示器的工作区设置首次窗口大小（68% 宽、62% 高），不再受已保存会话中 80×24 终端网格的限制。当前版本只是一个按需调用模型的 AI 助手：提供 AI 侧边栏、可选终端上下文、兼容模型接口和命令确认，不会自主规划任务、持续执行操作或替代人工判断。AI 输出仍可能出错，执行任何生成命令前必须人工复核，不建议直接用于无人值守生产操作。
 
 本项目由独立开发者维护，不隶属于 PuTTY、OpenAI、任何模型服务商或堡垒机产品供应商，也不代表这些项目或机构获得授权、赞助或认可。第三方名称仅用于说明兼容性和许可证归属，相关权利归各自权利人所有。
+
+## 项目定位
+
+本项目已从旧名称 **PuTTY AI** 更名为 **PuTTY-Assistant**。它目前停留在 AI 助手阶段，用户发起问题后，模型返回解释、排查思路或候选命令，用户决定是否采纳和执行。它不是“副驾驶”，也不是会自主行动的 agent。
+
+未来如果需要更高自主性的任务规划、工具调用和持续执行能力，将另行建设 **Terminal-Agent** 项目；这些能力不属于当前仓库的承诺范围。
+
+当前 AI 助手的维护入口是本仓库：[AI-DIY/PuTTY-Assistant](https://github.com/AI-DIY/PuTTY-Assistant)。旧名称页面、历史下载包和搜索结果应优先引导到这里。
 
 ## 项目简介
 
 开发、运维和技术支持人员经常需要在 SSH 终端、搜索引擎与 AI 工具之间反复切换：复制报错、补充上下文、生成命令，再粘贴回终端执行。这个过程不仅影响效率，还容易遗漏关键信息或误执行命令。
 
-PuTTY AI 在保留 PuTTY 原有使用习惯的基础上，为终端增加了一个可按需感知当前会话上下文的 AI 助手。用户可以直接用自然语言描述问题，由 AI 辅助分析日志、解释命令、定位故障并生成操作建议。
+PuTTY-Assistant 在保留 PuTTY 原有使用习惯的基础上，为终端增加了一个可按需使用的 AI 助手。用户可以直接用自然语言描述问题，由模型辅助分析日志、解释命令、梳理故障线索并生成操作建议；最终判断和执行仍由用户完成。
 
 ## 已实现能力
 
@@ -35,7 +42,7 @@ PuTTY AI 在保留 PuTTY 原有使用习惯的基础上，为终端增加了一�
 - **中文多轮会话**：界面提示、设置信息、系统提示词和模型请求上下文均使用中文，并支持连续追问。
 - **多主机工作台**：顶部主机标签展示当前连接和在线状态，可在多个 PuTTY 进程之间切换；AI 聊天记录按主机隔离。
 - **命令生成与解释**：生成候选命令，同时说明用途、参数和潜在影响。
-- **确认后回填终端**：命令先展示、后确认，再发送到 SSH 终端，降低误操作风险。
+- **确认后回填终端**：命令先展示、后确认，再回填到 SSH 终端；程序不会自动按回车执行。
 - **兼容自定义模型**：支持 OpenAI Chat Completions 兼容接口，接口配置和 API Key 可跨会话持久保存。
 
 ## 交互流程
@@ -78,7 +85,7 @@ flowchart LR
 - 用户问题、AI 回复、系统消息和错误消息使用不同的标签色、正文色和背景色；每条 AI 回复明确显示“AI 助手”，各轮之间使用细线分隔，连续多轮对话仍能快速分辨双方内容。
 - 候选命令不再使用含义不明确的固定按钮；鼠标悬停到回复代码块时显示 **填入终端**，危险命令显示 **检查并填入**。
 - 多个 PuTTY 主机连接会显示在顶部标签栏；切换标签时终端和右侧 AI 会话一起切换，每个主机只显示自己的聊天记录。
-- 顶部全局窗口控制会同时最小化、最大化/还原或关闭所有正在运行的 PuTTY AI 会话，关闭时仍保留每个会话原有的确认保护。
+- 顶部全局窗口控制会同时最小化、最大化/还原或关闭所有正在运行的 PuTTY 会话，关闭时仍保留每个会话原有的确认保护。
 - 主机信息栏会显示已配置或 SSH `login as:` 提示中实际输入的登录用户；无法可靠获取时，用户信息项和会话标签会自动隐藏，不再显示占位符。
 - 底部操作区使用独立的脱敏终端上下文切换按钮和清空对话按钮；会话历史始终在当前主机内保留，不再暴露容易误操作的保存选项。
 - 脱敏终端上下文的文字和切换轨道按内容紧凑排列；首次打开的主窗口会在当前显示器工作区居中显示。
@@ -130,7 +137,7 @@ PuTTY 会加载临时配置和密码后直接连接，不显示 Configuration �
 
 ## AI 面板使用
 
-建立 SSH 会话后，右侧会显示 PuTTY AI 面板：
+建立 SSH 会话后，右侧会显示 PuTTY-Assistant 的 AI 助手面板：
 
 1. 点击 **设置**，通过中文设置项填写 OpenAI Chat Completions 兼容接口地址、模型名和 API Key；右侧按钮、状态和提示信息均使用中文。
 2. 点击 **永久保存** 后，接口地址、模型、API Key 和上下文长度都会保存到当前用户配置，并在下次打开会话时恢复且可继续编辑。API Key 使用 Windows DPAPI 按当前用户加密，不以明文写入注册表。
@@ -157,7 +164,7 @@ $env:OPENAI_API_KEY = "your-api-key"
 
 ### 审计
 
-- 程序默认记录不含问题、回复、上下文、命令正文和 API Key 的元数据审计日志，位置为 `%LOCALAPPDATA%\PuTTY AI\audit.log`。日志只包含时间、事件类型、模型端点主机和风险级别等信息。
+- 程序默认记录不含问题、回复、上下文、命令正文和 API Key 的元数据审计日志，位置为 `%LOCALAPPDATA%\PuTTY AI\audit.log`。该目录名为历史兼容路径，日志只包含时间、事件类型、模型端点主机和风险级别等信息。
 
 ## 测试与验证
 
@@ -211,12 +218,12 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 
 远程验证默认连接 `ssh.github.com:443`，禁用 Pageant 和连接共享，只验证主机密钥协商及服务端进入 `publickey` 认证阶段。未提供凭据时出现 `No supported authentication methods available (server sent: publickey)` 是预期结果，表示 SSH 连接和握手已经成功到达认证阶段。
 
-打包产物位于 `package/PuTTY-AI-v1.0.6-windows-x64.zip`，包含 `putty.exe`、应用本地 VC Runtime、项目与 PuTTY 许可证、第三方说明和发布说明。
+当前发布包沿用旧文件名 `package/PuTTY-AI-v1.0.6-windows-x64.zip`，以兼容已有下载入口；包内包含 `putty.exe`、应用本地 VC Runtime、项目与 PuTTY 许可证、第三方说明和发布说明。
 
-## 已完成的开发内容
+## 当前已完成的助手能力
 
 - [x] 导入 PuTTY 0.84 源码
-- [x] 明确产品定位与核心交互流程
+- [x] 确定 AI 助手的基本定位与核心交互流程
 - [x] 实现终端右侧 AI 交互面板
 - [x] 实现会话上下文提取与长度控制
 - [x] 接入 OpenAI Chat Completions 兼容接口
@@ -244,8 +251,8 @@ powershell -ExecutionPolicy Bypass -File tests\run-remote-ssh.ps1 `
 ## 项目结构
 
 ```text
-putty-ai/
-├── putty-src/              # PuTTY 0.84 与 PuTTY AI 源代码
+PuTTY-Assistant/
+├── putty-src/              # PuTTY 0.84 与 PuTTY-Assistant 源代码
 │   └── windows/ai.c        # AI 面板、模型调用、安全与审计实现
 ├── package/                # 构建后生成的 Windows 发布包
 └── readme.md               # 项目说明
@@ -267,7 +274,7 @@ AI 生成的命令可能不准确，也可能不适合当前环境。执行任�
 
 本项目基于 [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) 0.84 源码进行探索和开发，并非 PuTTY 官方项目。
 
-PuTTY AI 的原创增量代码和项目材料适用仓库根目录的 [LICENSE](LICENSE)。仓库中的 PuTTY 源代码仍遵循其原始许可条款，详情请查看 [putty-src/LICENCE](putty-src/LICENCE)。保留原始版权与机构名称仅为履行许可证归属要求，不表示本项目与其存在隶属或官方关联。
+PuTTY-Assistant 的原创增量代码和项目材料适用仓库根目录的 [LICENSE](LICENSE)。仓库中的 PuTTY 源代码仍遵循其原始许可条款，详情请查看 [putty-src/LICENCE](putty-src/LICENCE)。保留原始版权与机构名称仅为履行许可证归属要求，不表示本项目与其存在隶属或官方关联。
 
 ---
 

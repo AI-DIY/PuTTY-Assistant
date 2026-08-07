@@ -27,6 +27,7 @@ $requestOnePath = Join-Path $ArtifactDirectory "mock-ai-request-1.json"
 $requestTwoPath = Join-Path $ArtifactDirectory "mock-ai-request-2.json"
 $requestThreePath = Join-Path $ArtifactDirectory "mock-ai-request-3.json"
 $authorizationThreePath = Join-Path $ArtifactDirectory "mock-ai-authorization-3.txt"
+# The legacy directory is still checked because existing builds write there.
 $launchLogDirectory = Join-Path $env:LOCALAPPDATA "PuTTY AI"
 function Get-LaunchLogState {
     $state = @{}
@@ -114,6 +115,7 @@ $expectedCommand = if ($Dangerous) {
 } else {
     "echo putty-ai-ok"
 }
+# The legacy registry key is still used for backwards-compatible settings.
 $aiRegistryPath = "Software\PuTTY AI"
 $aiRegistrySnapshot = @()
 $aiRegistryExisted = $false
@@ -716,7 +718,7 @@ try {
     $minimumInitialHeight = [Math]::Floor($workHeight * 0.62) - 4
     if ($windowWidth -lt $minimumInitialWidth -or
         $windowHeight -lt $minimumInitialHeight) {
-        throw "The initial PuTTY AI workspace was smaller than the " +
+        throw "The initial PuTTY-Assistant workspace was smaller than the " +
             "configured monitor-relative layout"
     }
 
@@ -1189,7 +1191,7 @@ try {
         Start-Sleep -Milliseconds 200
         & $screenshotTool -p $putty.Id -o $ScreenshotPath
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ScreenshotPath)) {
-            throw "Could not capture the completed PuTTY AI visual regression image"
+            throw "Could not capture the completed PuTTY-Assistant visual regression image"
         }
     }
     if ($conversation.Contains('## ') -or $conversation.Contains('```') -or
@@ -1357,7 +1359,7 @@ try {
         $received = [Text.Encoding]::UTF8.GetString(
             [IO.File]::ReadAllBytes($capturePath))
         if ($received.Contains("`r") -or $received.Contains("`n")) {
-            throw "PuTTY AI automatically sent Enter with the command"
+            throw "PuTTY-Assistant automatically sent Enter with the command"
         }
     }
     if ($received -ne "(buffered by local line discipline)" -and
