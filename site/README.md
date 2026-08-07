@@ -17,4 +17,4 @@
 3. 发布新版本时，同时更新 `index.html` 中的版本、发布日期、校验值、下载链接和 `sitemap.xml` 的日期。
 4. 需要 HTTPS 时，应在此 Nginx 容器前配置 TLS 终止，并将页面中的规范 URL、站点地图和 robots 文件统一改为 HTTPS 地址。
 
-页面中的源码链接指向 <https://github.com/AI-DIY/PuTTY-Assistant>。当前站点介绍的是 AI 助手阶段；未来的 Terminal-Agent 将是另一个项目方向。
+页面中的源码链接指向 <https://github.com/AI-DIY/PuTTY-Assistant>。当前站点介绍的是 AI 助手阶段；面向封闭式内网、堡垒机合规、操作审计和安全控制的 Terminal-Agent 正在另一个仓库中开发：<https://github.com/AI-DIY/Terminal-Agent>。

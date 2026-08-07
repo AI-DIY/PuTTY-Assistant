@@ -32,6 +32,12 @@ PuTTY-Assistant 是一个放在 SSH 终端旁边的 AI 助手。它不接管终�
 
 当前 AI 助手的维护入口是本仓库：[AI-DIY/PuTTY-Assistant](https://github.com/AI-DIY/PuTTY-Assistant)。
 
+## 下一步：Terminal-Agent
+
+面向需要在封闭式内网和堡垒机环境中工作的场景，我们正在单独开发 [Terminal-Agent](https://github.com/AI-DIY/Terminal-Agent)。它的规划重点是建立在堡垒机合规、操作审计和安全控制基础上的终端智能体，让终端任务能够在明确边界和可追溯的前提下逐步自动化。
+
+Terminal-Agent 仍处于开发阶段，上述内容是正在形成的方向，不代表当前版本已经具备这些智能体能力。关注终端智能体、内网适配或堡垒机合规场景的用户，可以直接前往 [Terminal-Agent 仓库](https://github.com/AI-DIY/Terminal-Agent) 查看进展。
+
 ## 它怎么工作
 
 工作流程保持简单：用户提问，按需附带终端上下文，模型返回建议，用户自行判断。终端上下文默认不发送，生成命令只会在确认后回填到终端。

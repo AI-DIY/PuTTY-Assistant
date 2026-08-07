@@ -32,6 +32,12 @@ More autonomous task planning and tool use may be explored later in a separate p
 
 The current maintenance entry point is this repository: [AI-DIY/PuTTY-Assistant](https://github.com/AI-DIY/PuTTY-Assistant).
 
+## Next Step: Terminal-Agent
+
+For teams that need terminal work inside closed internal networks and bastion-host environments, we are developing [Terminal-Agent](https://github.com/AI-DIY/Terminal-Agent) as a separate project. Its planned focus is a terminal agent built on bastion compliance, operation auditing, and security controls, so terminal work can become more automated while remaining bounded and traceable.
+
+Terminal-Agent is still under development. These are roadmap goals, not capabilities provided by the current PuTTY-Assistant release. Users interested in terminal agents, internal-network workflows, or bastion compliance can follow the [Terminal-Agent repository](https://github.com/AI-DIY/Terminal-Agent) directly.
+
 ## How It Works
 
 Developers, operations engineers, and technical support staff often switch repeatedly between an SSH terminal, search engines, and AI tools: copy an error, add context, generate a command, then paste it back into the terminal. This workflow affects efficiency and makes it easy to miss important information or execute the wrong command.
